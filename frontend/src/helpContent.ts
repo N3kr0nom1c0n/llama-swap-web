@@ -280,7 +280,7 @@ export const helpSections: HelpSection[] = [
             name: "Download temp dir",
             purpose: "Temporary workspace path for downloads and uploads.",
             effect: "Large operations may touch this path depending on download behavior.",
-            guidance: "Use a path backed by enough disk space. Your compose maps /tmp:/tmp.",
+            guidance: "Use a path backed by enough disk space. The recommended container path is /data/tmp; do not bind-mount host /tmp into the manager.",
           },
           {
             name: "Data dir",

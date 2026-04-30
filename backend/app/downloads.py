@@ -128,7 +128,7 @@ class DownloadManager:
             job.progress = 5
             self.db.save_job(job)
             destination = str(Path(job.destination_dir))
-            token = get_hf_token(self.settings) or None
+            token = get_hf_token(self.settings) or False
             kwargs = {
                 "repo_id": job.repo_id,
                 "revision": job.revision,

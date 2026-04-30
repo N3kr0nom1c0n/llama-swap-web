@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.hf_service import HfFileInfo, classify_file, classify_files, parse_hf_url
+from app.hf_service import HfFileInfo, classify_file, classify_files, download_selected_files, get_hf_file_info, parse_hf_url, resolve_hf_url
 from app.downloads import DownloadManager
 from app.database import Database
 from app.schemas import DownloadJob, DownloadRequest
@@ -59,6 +59,40 @@ def test_classifies_single_gguf_selected() -> None:
 
     assert classified.kind == "gguf"
     assert classified.selected
+
+
+def test_hf_calls_do_not_fall_back_to_process_env_token(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("HF_TOKEN", "hf_startup_secret")
+    calls: dict[str, object] = {}
+
+    class FakeApi:
+        def list_repo_files(self, repo_id, revision, token):
+            calls["resolve_token"] = token
+            return ["model.gguf"]
+
+        def get_paths_info(self, repo_id, files, revision, expand, token):
+            calls["info_token"] = token
+            item = type("Item", (), {})()
+            item.path = "model.gguf"
+            item.size = 1
+            item.blob_id = "abc"
+            return [item]
+
+    def fake_download(**kwargs):
+        calls["download_token"] = kwargs["token"]
+        cached = tmp_path / "cached.gguf"
+        cached.write_text("fake", encoding="utf-8")
+        return str(cached)
+
+    monkeypatch.setattr("app.hf_service.hf_hub_download", fake_download)
+
+    resolve_hf_url("https://huggingface.co/org/repo", token=False, api=FakeApi())
+    get_hf_file_info("org/repo", "main", ["model.gguf"], token=False, api=FakeApi())
+    download_selected_files("org/repo", "main", ["model.gguf"], str(tmp_path / "models"), str(tmp_path / "models"), token=False)
+
+    assert calls["resolve_token"] is False
+    assert calls["info_token"] is False
+    assert calls["download_token"] is False
 
 
 def test_download_job_records_written_and_container_files(tmp_path, monkeypatch) -> None:

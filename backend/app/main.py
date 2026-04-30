@@ -4,7 +4,7 @@ import os
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -18,22 +18,27 @@ from .schemas import (
     ConfigPreviewRequest,
     DownloadRequest,
     GpuDevice,
+    HfResolveRequest,
+    HfTokenRequest,
     ImportDraftRequest,
     ManagedModel,
     StateResponse,
 )
 from .settings import ManagerSettings, clear_hf_token, default_db_path, get_hf_token, save_hf_token
 
+UPLOAD_CHUNK_SIZE = 1024 * 1024
+
 
 def create_app(db_path: str | Path | None = None) -> FastAPI:
     db = Database(Path(db_path) if db_path else default_db_path())
     db.init()
+    settings = db.get_settings()
     app = FastAPI(title="Llama-Swap Manager", version="0.1.0")
     app.state.db = db
-    app.state.download_manager = DownloadManager(db, db.get_settings())
+    app.state.download_manager = DownloadManager(db, settings)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=settings.cors_allowed_origins,
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -66,8 +71,8 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         return saved.public_dict()
 
     @app.put("/api/settings/hf-token")
-    def put_hf_token(payload: dict) -> dict:
-        token = str(payload.get("token", ""))
+    def put_hf_token(payload: HfTokenRequest) -> dict:
+        token = payload.token
         try:
             save_hf_token(token, db.get_settings())
         except (OSError, ValueError) as exc:
@@ -91,12 +96,11 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         return db.save_gpus(gpus)
 
     @app.post("/api/hf/resolve")
-    def hf_resolve(payload: dict) -> dict:
+    def hf_resolve(payload: HfResolveRequest) -> dict:
         settings = db.get_settings()
-        url = payload.get("url", "")
-        revision = payload.get("revision") or settings.default_revision
+        revision = payload.revision or settings.default_revision
         try:
-            return resolve_hf_url(url, revision=revision, token=get_hf_token(settings) or None).model_dump()
+            return resolve_hf_url(payload.url, revision=revision, token=get_hf_token(settings) or False).model_dump()
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -188,15 +192,66 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         }
 
     @app.post("/api/uploads")
-    async def upload_file(role: str, file: UploadFile) -> dict:
+    async def upload_file(role: str, file: UploadFile, model_name: str = "") -> dict:
         settings = db.get_settings()
-        if role not in settings.role_directories.model_fields:
+        if role not in type(settings.role_directories).model_fields:
             raise HTTPException(status_code=400, detail="invalid role")
         role_dir = getattr(settings.role_directories, role)
-        destination_dir = safe_join(settings.manager_model_root, Path(role_dir).relative_to(settings.llama_swap_model_root))
-        destination = safe_join(destination_dir, file.filename or "upload.gguf")
-        destination.write_bytes(await file.read())
+        try:
+            role_root = safe_join(settings.manager_model_root, Path(role_dir).relative_to(settings.llama_swap_model_root))
+            destination = _safe_upload_destination(
+                role_root,
+                file.filename or "",
+                model_name,
+                settings.allowed_upload_extensions,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temp_destination = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.uploading")
+        bytes_written = 0
+        try:
+            with temp_destination.open("wb") as output:
+                while chunk := await file.read(UPLOAD_CHUNK_SIZE):
+                    bytes_written += len(chunk)
+                    if bytes_written > settings.max_upload_bytes:
+                        raise HTTPException(status_code=413, detail="upload exceeds max_upload_bytes")
+                    output.write(chunk)
+            os.replace(temp_destination, destination)
+        except HTTPException:
+            temp_destination.unlink(missing_ok=True)
+            raise
+        except OSError as exc:
+            temp_destination.unlink(missing_ok=True)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"manager_path": str(destination), "container_path": manager_to_llama_path(str(destination), settings)}
+
+    @app.get("/api/health")
+    def health(response: Response) -> dict:
+        settings = db.get_settings()
+        payload = {
+            "app": {"status": "ok", "version": app.version},
+            "db": _path_status(db.path),
+            "config": _path_status(Path(settings.llama_swap_config_path)),
+            "model_root": _path_status(Path(settings.manager_model_root)),
+            "backups": _path_status(Path(settings.backups_dir)),
+        }
+        healthy = (
+            payload["db"]["writable"]
+            and payload["config"]["exists"]
+            and not payload["config"]["is_dir"]
+            and payload["config"]["writable"]
+            and payload["model_root"]["exists"]
+            and payload["model_root"]["is_dir"]
+            and payload["model_root"]["writable"]
+            and payload["backups"]["exists"]
+            and payload["backups"]["is_dir"]
+            and payload["backups"]["writable"]
+        )
+        payload["status"] = "ok" if healthy else "degraded"
+        if not healthy:
+            response.status_code = 503
+        return payload
 
     @app.get("/api/events")
     async def events() -> StreamingResponse:
@@ -224,3 +279,42 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
 
 
 app = create_app()
+
+
+def _safe_upload_destination(role_root: Path, filename: str, model_name: str, allowed_extensions: list[str]) -> Path:
+    raw_name = filename.strip()
+    if not raw_name:
+        raise ValueError("upload filename is required")
+    candidate_name = Path(_safe_path_component(raw_name, "upload filename"))
+    allowed = {extension.lower() for extension in allowed_extensions}
+    if candidate_name.suffix.lower() not in allowed:
+        raise ValueError("unsupported upload extension")
+    model_dir = _safe_path_component(model_name.strip() or candidate_name.stem, "model directory")
+    destination = safe_join(role_root, model_dir, raw_name)
+    if destination.is_symlink():
+        raise ValueError("upload destination cannot be a symlink")
+    if destination.exists() and not destination.is_file():
+        raise ValueError("upload destination is not a file")
+    return destination
+
+
+def _safe_path_component(value: str, label: str) -> str:
+    if not value:
+        raise ValueError(f"{label} is required")
+    candidate = Path(value)
+    if candidate.is_absolute() or candidate.name != value or "\\" in value or value in {".", ".."}:
+        raise ValueError(f"{label} must be a safe basename")
+    if ".." in candidate.parts:
+        raise ValueError(f"{label} cannot contain traversal")
+    return value
+
+
+def _path_status(path: Path) -> dict:
+    target = path if path.exists() else path.parent
+    return {
+        "path": str(path),
+        "exists": path.exists(),
+        "is_dir": path.is_dir(),
+        "readable": os.access(path, os.R_OK) if path.exists() else False,
+        "writable": os.access(target, os.W_OK),
+    }

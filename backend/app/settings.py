@@ -37,10 +37,30 @@ class ManagerSettings(BaseModel):
     llama_swap_model_root: str = "/models"
     llama_swap_config_path: str = "/app/config.yaml"
     backups_dir: str = "/backups"
-    download_temp_dir: str = "/tmp"
+    download_temp_dir: str = "/data/tmp"
     data_dir: str = "/data"
     default_revision: str = "main"
     max_parallel_downloads: int = 1
+    max_upload_bytes: int = 50 * 1024 * 1024 * 1024
+    allowed_upload_extensions: list[str] = Field(
+        default_factory=lambda: [
+            ".gguf",
+            ".safetensors",
+            ".json",
+            ".jinja",
+            ".jinja2",
+            ".model",
+            ".tiktoken",
+        ]
+    )
+    cors_allowed_origins: list[str] = Field(
+        default_factory=lambda: [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:8081",
+            "http://127.0.0.1:8081",
+        ]
+    )
     disk_safety_gb: int = 20
     llama_server_cmd: str = "/app/llama-server"
     role_directories: RoleDirectories = Field(default_factory=RoleDirectories)
@@ -67,12 +87,28 @@ def settings_from_env() -> ManagerSettings:
         llama_swap_model_root=os.getenv("LLAMA_SWAP_MODEL_ROOT", "/models"),
         llama_swap_config_path=os.getenv("LLAMA_SWAP_CONFIG_PATH", "/app/config.yaml"),
         backups_dir=os.getenv("BACKUPS_DIR", "/backups"),
-        download_temp_dir=os.getenv("DOWNLOAD_TEMP_DIR", "/tmp"),
+        download_temp_dir=os.getenv("DOWNLOAD_TEMP_DIR", "/data/tmp"),
         data_dir=data_dir,
         max_parallel_downloads=int(os.getenv("MAX_PARALLEL_DOWNLOADS", "1")),
+        max_upload_bytes=int(os.getenv("MAX_UPLOAD_BYTES", str(50 * 1024 * 1024 * 1024))),
+        allowed_upload_extensions=_csv_env(
+            "ALLOWED_UPLOAD_EXTENSIONS",
+            [".gguf", ".safetensors", ".json", ".jinja", ".jinja2", ".model", ".tiktoken"],
+        ),
+        cors_allowed_origins=_csv_env(
+            "CORS_ALLOWED_ORIGINS",
+            ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8081", "http://127.0.0.1:8081"],
+        ),
         disk_safety_gb=int(os.getenv("DISK_SAFETY_GB", "20")),
         llama_server_cmd=os.getenv("LLAMA_SERVER_CMD", "/app/llama-server"),
     )
+
+
+def _csv_env(name: str, default: list[str]) -> list[str]:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return [item.strip() for item in raw.split(",") if item.strip()]
 
 
 def default_db_path(settings: ManagerSettings | None = None) -> Path:
@@ -103,16 +139,19 @@ def hf_token_env_file(settings: ManagerSettings | None = None) -> Path:
 
 
 def get_hf_token(settings: ManagerSettings | None = None) -> str:
-    file_token = _read_env_token(hf_token_env_file(settings))
-    if file_token:
+    file_has_key, file_token = _read_env_token_state(hf_token_env_file(settings))
+    if file_has_key:
         return file_token
     return os.getenv(HF_TOKEN_KEY, "")
 
 
 def hf_token_source(settings: ManagerSettings | None = None) -> str:
     file_path = hf_token_env_file(settings)
-    if _read_env_token(file_path):
+    file_has_key, file_token = _read_env_token_state(file_path)
+    if file_token:
         return str(file_path)
+    if file_has_key:
+        return ""
     if os.getenv(HF_TOKEN_KEY):
         return "environment"
     return ""
@@ -126,33 +165,37 @@ def save_hf_token(token: str, settings: ManagerSettings | None = None) -> Path:
         raise ValueError("HF token cannot contain newlines")
     path = hf_token_env_file(settings)
     _write_env_token(path, token)
-    os.environ[HF_TOKEN_KEY] = token
     return path
 
 
 def clear_hf_token(settings: ManagerSettings | None = None) -> Path:
     path = hf_token_env_file(settings)
-    _write_env_token(path, "")
-    os.environ.pop(HF_TOKEN_KEY, None)
+    _write_env_token(path, "", keep_empty=True)
     return path
 
 
 def _read_env_token(path: Path) -> str:
+    return _read_env_token_state(path)[1]
+
+
+def _read_env_token_state(path: Path) -> tuple[bool, str]:
     if not path.exists():
-        return ""
+        return False, ""
     token = ""
+    found = False
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return ""
+        return False, ""
     for line in lines:
         key, value = _parse_env_line(line)
         if key == HF_TOKEN_KEY:
+            found = True
             token = value
-    return token
+    return found, token
 
 
-def _write_env_token(path: Path, token: str) -> None:
+def _write_env_token(path: Path, token: str, keep_empty: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True) if path.exists() else []
     next_lines: list[str] = []
@@ -161,11 +204,11 @@ def _write_env_token(path: Path, token: str) -> None:
         key, _value = _parse_env_line(line)
         if key == HF_TOKEN_KEY:
             replaced = True
-            if token:
+            if token or keep_empty:
                 next_lines.append(f"{HF_TOKEN_KEY}={token}\n")
             continue
         next_lines.append(line)
-    if token and not replaced:
+    if (token or keep_empty) and not replaced:
         if next_lines and not next_lines[-1].endswith("\n"):
             next_lines[-1] += "\n"
         next_lines.append(f"{HF_TOKEN_KEY}={token}\n")

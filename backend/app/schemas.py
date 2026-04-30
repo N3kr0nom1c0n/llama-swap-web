@@ -55,6 +55,10 @@ class HfResolveRequest(BaseModel):
     revision: str = "main"
 
 
+class HfTokenRequest(BaseModel):
+    token: str
+
+
 class HfFile(BaseModel):
     path: str
     kind: Literal["gguf", "gguf_part", "mmproj", "chat_template", "tokenizer", "other"]

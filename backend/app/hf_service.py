@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import re
 import shutil
 from dataclasses import dataclass
@@ -75,10 +74,10 @@ def classify_files(paths: list[str]) -> list[HfFile]:
     return [classify_file(path) for path in sorted(paths)]
 
 
-def resolve_hf_url(url: str, revision: str = "main", token: str | None = None, api: HfApi | None = None) -> HfResolveResponse:
+def resolve_hf_url(url: str, revision: str = "main", token: str | bool | None = None, api: HfApi | None = None) -> HfResolveResponse:
     reference = parse_hf_url(url, revision)
     api = api or HfApi()
-    files = api.list_repo_files(reference.repo_id, revision=reference.revision, token=token or os.getenv("HF_TOKEN") or None)
+    files = api.list_repo_files(reference.repo_id, revision=reference.revision, token=token)
     classified = classify_files(files)
     if reference.filename:
         for item in classified:
@@ -95,7 +94,7 @@ def get_hf_file_info(
     repo_id: str,
     revision: str,
     files: list[str],
-    token: str | None = None,
+    token: str | bool | None = None,
     api: HfApi | None = None,
 ) -> list[HfFileInfo]:
     api = api or HfApi()
@@ -104,7 +103,7 @@ def get_hf_file_info(
         files,
         revision=revision,
         expand=True,
-        token=token or os.getenv("HF_TOKEN") or None,
+        token=token,
     )
     repo_cache = Path(constants.HF_HUB_CACHE) / repo_folder_name(repo_id=repo_id, repo_type="model") / "blobs"
     result: list[HfFileInfo] = []
@@ -130,7 +129,7 @@ def download_selected_files(
     files: list[str],
     destination_dir: str,
     model_root: str,
-    token: str | None = None,
+    token: str | bool | None = None,
 ) -> list[str]:
     destination = safe_join(model_root, str(Path(destination_dir).relative_to(model_root)) if Path(destination_dir).is_absolute() else destination_dir)
     destination.mkdir(parents=True, exist_ok=True)
@@ -140,7 +139,7 @@ def download_selected_files(
             repo_id=repo_id,
             filename=filename,
             revision=revision,
-            token=token or os.getenv("HF_TOKEN") or None,
+            token=token,
         )
         target = safe_join(destination, Path(filename).name)
         shutil.copy2(cached, target)

@@ -14,6 +14,18 @@ from app.schemas import ManagedModel
 from app.settings import ManagerSettings
 
 
+def make_settings(tmp_path: Path, **overrides: object) -> ManagerSettings:
+    data = {
+        "manager_model_root": str(tmp_path / "models"),
+        "llama_swap_model_root": "/models",
+        "backups_dir": str(tmp_path / "backups"),
+        "llama_swap_config_path": str(tmp_path / "config.yaml"),
+        "download_temp_dir": str(tmp_path / "tmp"),
+    }
+    data.update(overrides)
+    return ManagerSettings(**data)
+
+
 def test_manager_to_llama_path_rewrites_model_root() -> None:
     settings = ManagerSettings(manager_model_root="/host/models", llama_swap_model_root="/models")
 
@@ -28,12 +40,7 @@ def test_safe_join_rejects_path_traversal(tmp_path: Path) -> None:
 
 
 def test_preview_generates_matrix_and_no_groups(tmp_path: Path) -> None:
-    settings = ManagerSettings(
-        manager_model_root=str(tmp_path / "models"),
-        llama_swap_model_root="/models",
-        backups_dir=str(tmp_path / "backups"),
-        llama_swap_config_path=str(tmp_path / "config.yaml"),
-    )
+    settings = make_settings(tmp_path)
     (tmp_path / "models").mkdir()
     models = [
         ManagedModel(
@@ -81,12 +88,7 @@ def test_preview_rejects_legacy_groups() -> None:
 
 
 def test_preview_preserves_existing_matrix_entries(tmp_path: Path) -> None:
-    settings = ManagerSettings(
-        manager_model_root=str(tmp_path / "models"),
-        llama_swap_model_root="/models",
-        backups_dir=str(tmp_path / "backups"),
-        llama_swap_config_path=str(tmp_path / "config.yaml"),
-    )
+    settings = make_settings(tmp_path)
     (tmp_path / "models").mkdir()
     model = ManagedModel(
         id="chat",
@@ -117,12 +119,7 @@ matrix:
 
 
 def test_preview_updates_existing_managed_matrix_entry_idempotently(tmp_path: Path) -> None:
-    settings = ManagerSettings(
-        manager_model_root=str(tmp_path / "models"),
-        llama_swap_model_root="/models",
-        backups_dir=str(tmp_path / "backups"),
-        llama_swap_config_path=str(tmp_path / "config.yaml"),
-    )
+    settings = make_settings(tmp_path)
     (tmp_path / "models").mkdir()
     model = ManagedModel(
         id="chat",
@@ -165,12 +162,7 @@ def test_preview_rejects_host_paths_in_command() -> None:
 
 
 def test_command_builder_accepts_ui_underscore_flag_names(tmp_path: Path) -> None:
-    settings = ManagerSettings(
-        manager_model_root=str(tmp_path / "models"),
-        llama_swap_model_root="/models",
-        backups_dir=str(tmp_path / "backups"),
-        llama_swap_config_path=str(tmp_path / "config.yaml"),
-    )
+    settings = make_settings(tmp_path)
     (tmp_path / "models").mkdir()
     model = ManagedModel(
         id="chat",
