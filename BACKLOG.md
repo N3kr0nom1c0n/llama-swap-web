@@ -68,7 +68,6 @@
 - I4: Align local/test Python version with Docker/pyproject Python version or test against the container target.
 - I5: Add backend `conftest.py` fixtures to reduce repeated app/client setup.
 - I6: Add frontend test fixtures/builders for common settings payloads instead of copying large objects in each test.
-- I7: Fix README test command. `npm test -- --run` passes `--run` twice because package.json already uses `vitest run`; document `npm test` and keep `npm run build` as a separate build check.
 
 ### Test Coverage Gaps
 
@@ -253,3 +252,21 @@
 
 - Add byte-level Hugging Face download progress instead of only job-stage progress.
 - Add a per-job progress bar to the Download Queue.
+- Add CI and release QA workflows for backend tests, frontend tests, frontend build, Docker build, Compose validation, container smoke, and Playwright smoke.
+- Run the manager container as non-root by default and remove the recommended host `/tmp:/tmp` bind from the example Compose file.
+- Add direct `pydantic` dependency coverage through the current install/test/build gates.
+- Publish-ready GHCR workflow now includes `latest` on the default branch and version/SHA tags.
+- Make config preview/apply safer with selected-model scoping, staged preview fingerprints, expiry, single-use apply, destructive-change detection, and explicit destructive confirmation.
+- Preserve custom hooks during generated config rendering and keep preview generation read-only.
+- Quote generated llama-server command values with shell-safe escaping.
+- Add SQLite schema versioning and forward migration support for existing manager databases.
+- Add GPU detection, live status, tensor-split recommendation APIs, and GPU Planner controls.
+- Add current `config.yaml` import candidates so existing llama-swap model entries can become managed models.
+- Fix README test command so it documents `npm test` plus `npm run build` instead of passing duplicate Vitest args.
+- Fix stale matrix sets when a managed model matrix key changes.
+- Implement backup retention pruning and expose retention controls in Settings.
+- Add typed GPU recommendation request validation.
+- Generate unique imported model IDs when current config entries slugify to the same value or collide with existing managed models.
+- Reset GPU Planner tensor split recommendations when the device draft changes.
+- Gate mutating Playwright smoke tests behind `ALLOW_E2E_MUTATIONS=1` and document disposable-target usage.
+- Enforce model seed -> config preview -> config apply -> backup creation in CI container smoke.

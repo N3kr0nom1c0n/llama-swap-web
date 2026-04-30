@@ -12,6 +12,7 @@ MatrixBehavior = Literal["runs_alone", "with_support", "support", "custom"]
 SourceType = Literal["hf", "upload", "manual"]
 JobStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
 ModelFileKind = Literal["gguf", "gguf_part", "mmproj", "chat_template", "tokenizer", "other"]
+DestructiveChangeKind = Literal["model_removed", "matrix_removed", "hook_removed", "global_removed", "alias_removed"]
 
 
 class GpuDevice(BaseModel):
@@ -20,6 +21,10 @@ class GpuDevice(BaseModel):
     vram_gb: int
     role: str = ""
     notes: str = ""
+
+
+class GpuRecommendationRequest(BaseModel):
+    cuda_devices: list[int] = Field(default_factory=list)
 
 
 class ManagedModel(BaseModel):
@@ -140,6 +145,12 @@ class ConfigPreviewRequest(BaseModel):
     model_ids: list[str] = Field(default_factory=list)
 
 
+class DestructiveChange(BaseModel):
+    kind: DestructiveChangeKind
+    path: str
+    before: str
+
+
 class ConfigPreviewResponse(BaseModel):
     valid: bool
     stage_id: str = ""
@@ -147,10 +158,22 @@ class ConfigPreviewResponse(BaseModel):
     diff: str
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    destructive_changes: list[DestructiveChange] = Field(default_factory=list)
 
 
 class ConfigApplyRequest(BaseModel):
     stage_id: str
+    confirm_destructive: bool = False
+
+
+class ConfigImportCandidate(BaseModel):
+    id: str
+    model: ManagedModel
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ConfigImportRequest(BaseModel):
+    candidate_ids: list[str] = Field(default_factory=list)
 
 
 class StateResponse(BaseModel):

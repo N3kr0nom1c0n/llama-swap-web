@@ -288,6 +288,54 @@ main {
   line-height: 1.2;
 }
 
+.callout {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.callout p {
+  margin: 8px 0 0;
+  color: var(--muted);
+}
+
+.callout ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+}
+
+.inventory-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.inventory-card strong,
+.inventory-card span {
+  display: block;
+}
+
+.inventory-card span,
+.inventory-card li {
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.inventory-card ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
 .two-column,
 .split-code,
 .models-layout {

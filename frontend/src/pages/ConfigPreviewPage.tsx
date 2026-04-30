@@ -1,6 +1,6 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, FileWarning, RefreshCw } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api";
 import { CodeBlock } from "../components/CodeBlock";
 import { PageHeader } from "../components/PageHeader";
@@ -8,7 +8,9 @@ import { StatusPill } from "../components/StatusPill";
 import { queryKeys } from "../queryKeys";
 
 export function ConfigPreviewPage() {
+  const queryClient = useQueryClient();
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [confirmDestructive, setConfirmDestructive] = useState(false);
   const models = useQuery({ queryKey: queryKeys.models, queryFn: api.models });
   const preview = useQuery({
     queryKey: [...queryKeys.preview, selectedIds],
@@ -17,9 +19,18 @@ export function ConfigPreviewPage() {
   const apply = useMutation({
     mutationFn: () => {
       if (!preview.data?.stage_id) throw new Error("Regenerate a valid preview before applying.");
-      return api.applyConfig(preview.data.stage_id);
+      return api.applyConfig(preview.data.stage_id, confirmDestructive);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.state });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.preview });
     },
   });
+  const destructiveChanges = preview.data?.destructive_changes ?? [];
+
+  useEffect(() => {
+    setConfirmDestructive(false);
+  }, [preview.data?.stage_id]);
 
   function toggleModel(id: string) {
     setSelectedIds((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
@@ -36,7 +47,12 @@ export function ConfigPreviewPage() {
               <RefreshCw size={16} aria-hidden="true" />
               Regenerate
             </button>
-            <button className="button" onClick={() => apply.mutate()} disabled={!preview.data?.valid || !preview.data.stage_id || apply.isPending} type="button">
+            <button
+              className="button"
+              onClick={() => apply.mutate()}
+              disabled={!preview.data?.valid || !preview.data.stage_id || apply.isPending || (destructiveChanges.length > 0 && !confirmDestructive)}
+              type="button"
+            >
               <Check size={16} aria-hidden="true" />
               Apply Config
             </button>
@@ -87,6 +103,27 @@ export function ConfigPreviewPage() {
                 <li key={warning}>{warning}</li>
               ))}
             </ul>
+          </div>
+        </section>
+      ) : null}
+
+      {destructiveChanges.length ? (
+        <section className="alert-panel bad">
+          <FileWarning size={18} aria-hidden="true" />
+          <div>
+            <strong>Destructive changes require confirmation</strong>
+            <p>This preview removes existing config content. Review the diff before applying.</p>
+            <ul>
+              {destructiveChanges.map((change) => (
+                <li key={`${change.kind}-${change.path}`}>
+                  {change.kind}: {change.path} removes {change.before}
+                </li>
+              ))}
+            </ul>
+            <label className="check-row">
+              <input type="checkbox" checked={confirmDestructive} onChange={(event) => setConfirmDestructive(event.target.checked)} />
+              <span>I reviewed the removals and want to apply this destructive config.</span>
+            </label>
           </div>
         </section>
       ) : null}

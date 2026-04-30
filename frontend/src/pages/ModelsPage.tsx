@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Save } from "lucide-react";
+import { FileSearch, Plus, Save } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api, splitList } from "../api";
 import { CodeBlock } from "../components/CodeBlock";
@@ -15,6 +15,7 @@ export function ModelsPage() {
   const models = useQuery({ queryKey: queryKeys.models, queryFn: api.models });
   const settings = useQuery({ queryKey: queryKeys.settings, queryFn: api.settings });
   const gpus = useQuery({ queryKey: queryKeys.gpus, queryFn: api.gpus });
+  const importCandidates = useQuery({ queryKey: queryKeys.configImport, queryFn: api.configImportCandidates, enabled: false });
   const [selectedId, setSelectedId] = useState<string>("");
   const [draft, setDraft] = useState<ManagedModel>(emptyModel());
 
@@ -33,6 +34,17 @@ export function ModelsPage() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.models });
       void queryClient.invalidateQueries({ queryKey: queryKeys.state });
       void queryClient.invalidateQueries({ queryKey: queryKeys.preview });
+    },
+  });
+  const importSelected = useMutation({
+    mutationFn: api.importConfigCandidates,
+    onSuccess: (imported) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.models });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.state });
+      if (imported[0]) {
+        setSelectedId(imported[0].id);
+        setDraft(imported[0]);
+      }
     },
   });
 
@@ -61,6 +73,10 @@ export function ModelsPage() {
               <Plus size={16} aria-hidden="true" />
               New Model
             </button>
+            <button className="button secondary" type="button" onClick={() => importCandidates.refetch()} disabled={importCandidates.isFetching}>
+              <FileSearch size={16} aria-hidden="true" />
+              Import Config
+            </button>
             <button className="button" type="button" onClick={() => save.mutate(draft)} disabled={!draft.id || save.isPending}>
               <Save size={16} aria-hidden="true" />
               Save Model
@@ -68,6 +84,46 @@ export function ModelsPage() {
           </>
         }
       />
+
+      {importCandidates.data ? (
+        <section className="panel">
+          <div className="panel-header">
+            <h2>Current config import</h2>
+            <button className="button" type="button" onClick={() => importSelected.mutate(importCandidates.data.map((candidate) => candidate.id))} disabled={!importCandidates.data.length || importSelected.isPending}>
+              Import All
+            </button>
+          </div>
+          <div className="row-list">
+            {importCandidates.data.map((candidate) => (
+              <div className="inventory-card" key={candidate.id}>
+                <div>
+                  <strong>{candidate.model.display_name}</strong>
+                  <span>
+                    {candidate.model.role} · {candidate.model.primary_model_file || "raw command"}
+                  </span>
+                  {candidate.warnings.length ? (
+                    <ul>
+                      {candidate.warnings.map((warning) => (
+                        <li key={warning}>{warning}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+                <button className="button secondary" type="button" onClick={() => importSelected.mutate([candidate.id])}>
+                  Import
+                </button>
+              </div>
+            ))}
+            {!importCandidates.data.length ? <span className="muted">No importable model entries found in the current config.</span> : null}
+          </div>
+          {importSelected.error ? <p className="form-error">{importSelected.error.message}</p> : null}
+          {importSelected.isSuccess ? (
+            <p className="form-success">
+              Imported {importSelected.data.length} model {importSelected.data.length === 1 ? "entry" : "entries"}.
+            </p>
+          ) : null}
+        </section>
+      ) : null}
 
       <section className="models-layout">
         <aside className="model-list panel">

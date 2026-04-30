@@ -364,6 +364,81 @@ def test_model_scan_discovers_supported_files_without_following_external_symlink
     assert "/models/chat/tiny/escape.gguf" not in by_container_path
 
 
+def test_gpu_detection_endpoint_merges_saved_labels(tmp_path: Path, monkeypatch) -> None:
+    app = create_app(tmp_path / "manager.db")
+    client = TestClient(app)
+    client.put("/api/gpus", json=[{"index": 0, "name": "old", "vram_gb": 24, "role": "reasoning", "notes": "primary"}])
+    monkeypatch.setattr(
+        "app.main.detect_gpus",
+        lambda: {
+            "available": True,
+            "reason": "",
+            "gpus": [
+                {
+                    "index": 0,
+                    "name": "NVIDIA GeForce RTX 3090",
+                    "vram_gb": 24,
+                    "memory_total_mb": 24576,
+                    "memory_used_mb": 1024,
+                    "memory_free_mb": 23552,
+                }
+            ],
+        },
+    )
+
+    response = client.get("/api/gpus/detect")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["available"] is True
+    assert payload["gpus"][0]["name"] == "NVIDIA GeForce RTX 3090"
+    assert payload["gpus"][0]["role"] == "reasoning"
+    assert payload["gpus"][0]["notes"] == "primary"
+
+
+def test_gpu_detection_endpoint_reports_unavailable(tmp_path: Path, monkeypatch) -> None:
+    app = create_app(tmp_path / "manager.db")
+    client = TestClient(app)
+    monkeypatch.setattr("app.main.detect_gpus", lambda: {"available": False, "reason": "nvidia-smi unavailable", "gpus": []})
+
+    response = client.get("/api/gpus/detect")
+
+    assert response.status_code == 200
+    assert response.json() == {"available": False, "reason": "nvidia-smi unavailable", "gpus": []}
+
+
+def test_gpu_recommend_endpoint_returns_split(tmp_path: Path, monkeypatch) -> None:
+    app = create_app(tmp_path / "manager.db")
+    client = TestClient(app)
+    monkeypatch.setattr(
+        "app.main.detect_gpus",
+        lambda: {
+            "available": True,
+            "reason": "",
+            "gpus": [
+                {"index": 0, "memory_total_mb": 24576, "memory_free_mb": 24576},
+                {"index": 1, "memory_total_mb": 16384, "memory_free_mb": 16384},
+            ],
+        },
+    )
+
+    response = client.post("/api/gpus/recommend", json={"cuda_devices": [0, 1]})
+
+    assert response.status_code == 200
+    assert response.json()["recommendation"]["main_gpu"] == 0
+    assert response.json()["recommendation"]["tensor_split"] == "3,2"
+
+
+def test_gpu_recommend_rejects_malformed_device_values(tmp_path: Path, monkeypatch) -> None:
+    app = create_app(tmp_path / "manager.db")
+    client = TestClient(app)
+    monkeypatch.setattr("app.main.detect_gpus", lambda: {"available": True, "reason": "", "gpus": []})
+
+    response = client.post("/api/gpus/recommend", json={"cuda_devices": ["gpu0"]})
+
+    assert response.status_code == 422
+
+
 def test_import_returns_manager_destination_and_container_destination(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("MANAGER_MODEL_ROOT", str(tmp_path / "host-models"))
     monkeypatch.setenv("LLAMA_SWAP_MODEL_ROOT", "/models")
@@ -447,6 +522,134 @@ def test_config_preview_honors_requested_model_ids(tmp_path: Path, monkeypatch) 
     assert "one:" in scoped.json()["yaml"]
     assert "two:" not in scoped.json()["yaml"]
     assert unknown.status_code == 400
+
+
+def test_config_apply_blocks_destructive_stage_until_confirmed(tmp_path: Path, monkeypatch) -> None:
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        """
+models:
+  tiny-chat:
+    aliases:
+      - old-alias
+    cmd: /app/llama-server --port ${PORT} -m /models/chat/old.gguf
+matrix:
+  vars:
+    old: tiny-chat
+  sets:
+    old_set: old
+hooks:
+  on_startup:
+    preload:
+      - tiny-chat
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LLAMA_SWAP_CONFIG_PATH", str(config))
+    monkeypatch.setenv("BACKUPS_DIR", str(tmp_path / "backups"))
+    monkeypatch.setenv("MANAGER_MODEL_ROOT", str(tmp_path / "models"))
+    monkeypatch.setenv("LLAMA_SWAP_MODEL_ROOT", "/models")
+    monkeypatch.setenv("DOWNLOAD_TEMP_DIR", str(tmp_path / "tmp"))
+    app = create_app(tmp_path / "manager.db")
+    client = TestClient(app)
+    manager_model = tmp_path / "models" / "chat" / "tiny.gguf"
+    manager_model.parent.mkdir(parents=True)
+    manager_model.write_text("fake", encoding="utf-8")
+    client.post(
+        "/api/models",
+        json={
+            "id": "tiny-chat",
+            "display_name": "Tiny Chat",
+            "role": "chat",
+            "manager_files": [str(manager_model)],
+            "matrix_key": "tc",
+            "matrix_behavior": "runs_alone",
+        },
+    )
+
+    preview = client.post("/api/config/preview", json={"model_ids": ["tiny-chat"]})
+    stage_id = preview.json()["stage_id"]
+    blocked = client.post("/api/config/apply", json={"stage_id": stage_id})
+    confirmed = client.post("/api/config/apply", json={"stage_id": stage_id, "confirm_destructive": True})
+
+    assert preview.status_code == 200
+    assert preview.json()["destructive_changes"]
+    assert blocked.status_code == 409
+    assert "destructive" in blocked.json()["detail"]
+    assert confirmed.status_code == 200
+    assert "old-alias" not in config.read_text(encoding="utf-8")
+
+
+def test_config_import_candidates_can_be_reviewed_and_saved(tmp_path: Path, monkeypatch) -> None:
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        """
+models:
+  Existing Chat:
+    cmd: |
+      /app/llama-server --port ${PORT} -m /models/chat/existing/model.gguf \\
+        --ctx-size 4096 \\
+        --main-gpu 0
+    ttl: 0
+    env:
+      - CUDA_VISIBLE_DEVICES=0
+matrix:
+  vars:
+    ec: Existing Chat
+  sets:
+    ec_set: ec
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LLAMA_SWAP_CONFIG_PATH", str(config))
+    monkeypatch.setenv("BACKUPS_DIR", str(tmp_path / "backups"))
+    monkeypatch.setenv("MANAGER_MODEL_ROOT", str(tmp_path / "models"))
+    monkeypatch.setenv("LLAMA_SWAP_MODEL_ROOT", "/models")
+    app = create_app(tmp_path / "manager.db")
+    client = TestClient(app)
+
+    candidates = client.get("/api/config/import-candidates")
+    imported = client.post("/api/config/import-candidates", json={"candidate_ids": ["existing-chat"]})
+
+    assert candidates.status_code == 200
+    assert candidates.json()[0]["id"] == "existing-chat"
+    assert candidates.json()[0]["model"]["primary_model_file"] == "/models/chat/existing/model.gguf"
+    assert imported.status_code == 200
+    assert imported.json()[0]["id"] == "existing-chat"
+    assert client.get("/api/models").json()[0]["id"] == "existing-chat"
+
+
+def test_config_import_generates_unique_ids_for_colliding_slugs(tmp_path: Path, monkeypatch) -> None:
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        """
+models:
+  Existing Chat:
+    cmd: /app/llama-server --port ${PORT} -m /models/chat/one.gguf
+  Existing-Chat:
+    cmd: /app/llama-server --port ${PORT} -m /models/chat/two.gguf
+groups:
+  legacy:
+    members:
+      - Existing Chat
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LLAMA_SWAP_CONFIG_PATH", str(config))
+    monkeypatch.setenv("BACKUPS_DIR", str(tmp_path / "backups"))
+    monkeypatch.setenv("MANAGER_MODEL_ROOT", str(tmp_path / "models"))
+    monkeypatch.setenv("LLAMA_SWAP_MODEL_ROOT", "/models")
+    app = create_app(tmp_path / "manager.db")
+    client = TestClient(app)
+
+    candidates = client.get("/api/config/import-candidates")
+    imported = client.post("/api/config/import-candidates", json={"candidate_ids": []})
+
+    assert candidates.status_code == 200
+    assert [candidate["id"] for candidate in candidates.json()] == ["existing-chat", "existing-chat-2"]
+    assert all(any("legacy groups" in warning for warning in candidate["warnings"]) for candidate in candidates.json())
+    assert imported.status_code == 200
+    assert [model["id"] for model in imported.json()] == ["existing-chat", "existing-chat-2"]
 
 
 def test_config_apply_rejects_replay_expired_and_stale_stage(tmp_path: Path, monkeypatch) -> None:
@@ -668,8 +871,10 @@ def test_config_apply_blocks_destructive_empty_models_stage(tmp_path: Path, monk
     app.state.db.save_staged_config(stage_id, "models: {}\n", "", fingerprint="")
 
     response = client.post("/api/config/apply", json={"stage_id": stage_id})
+    confirmed = client.post("/api/config/apply", json={"stage_id": stage_id, "confirm_destructive": True})
 
     assert response.status_code == 409
+    assert confirmed.status_code == 409
     assert "destructive" in response.json()["detail"]
     assert "existing" in config.read_text(encoding="utf-8")
 

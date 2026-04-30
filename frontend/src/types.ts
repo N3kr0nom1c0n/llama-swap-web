@@ -31,6 +31,8 @@ export interface ManagerSettings {
   llama_swap_model_root: string;
   llama_swap_config_path: string;
   backups_dir: string;
+  backup_retention_count: number;
+  backup_retention_days: number;
   download_temp_dir: string;
   data_dir: string;
   default_revision: string;
@@ -50,6 +52,31 @@ export interface GpuDevice {
   vram_gb: number;
   role: string;
   notes: string;
+}
+
+export interface DetectedGpu extends GpuDevice {
+  memory_total_mb: number;
+  memory_used_mb: number;
+  memory_free_mb: number;
+}
+
+export interface GpuDetectionResponse {
+  available: boolean;
+  reason: string;
+  gpus: DetectedGpu[];
+}
+
+export interface GpuRecommendation {
+  cuda_devices: number[];
+  main_gpu: number | null;
+  tensor_split: string;
+  warnings: string[];
+}
+
+export interface GpuRecommendationResponse {
+  available: boolean;
+  reason: string;
+  recommendation: GpuRecommendation;
 }
 
 export interface ManagedModel {
@@ -79,6 +106,12 @@ export interface ManagedModel {
   startup_preload: boolean;
   created_at?: string | null;
   updated_at?: string | null;
+}
+
+export interface ConfigImportCandidate {
+  id: string;
+  model: ManagedModel;
+  warnings: string[];
 }
 
 export interface HfFile {
@@ -150,6 +183,11 @@ export interface ConfigPreviewResponse {
   diff: string;
   errors: string[];
   warnings: string[];
+  destructive_changes?: Array<{
+    kind: "model_removed" | "matrix_removed" | "hook_removed" | "global_removed" | "alias_removed";
+    path: string;
+    before: string;
+  }>;
 }
 
 export interface ApplyResponse {

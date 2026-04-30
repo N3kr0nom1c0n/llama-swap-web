@@ -7,7 +7,9 @@ import re
 import shlex
 import shutil
 import tempfile
-from datetime import datetime
+from collections.abc import Mapping, Sequence
+from datetime import datetime, timedelta
+from io import StringIO
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -15,13 +17,15 @@ from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 from ruamel.yaml.scalarstring import LiteralScalarString
 
-from .schemas import ConfigPreviewResponse, ManagedModel
+from .schemas import ConfigPreviewResponse, DestructiveChange, ManagedModel
 from .settings import ManagerSettings
 
 
 SAFE_MATRIX_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,7}$")
+MATRIX_REF_TOKEN = re.compile(r"\+?([A-Za-z][A-Za-z0-9_]{0,7})")
 RAW_COMMAND_PATH_FLAGS = {"-m", "--model", "--mmproj", "--chat-template-file"}
 RAW_COMMAND_NON_PATH_FLAGS = {"--port"}
+DESTRUCTIVE_GLOBAL_KEYS = ("healthCheckTimeout", "logLevel", "sendLoadingState", "includeAliasesInList")
 
 
 def safe_join(root: str | Path, *parts: str) -> Path:
@@ -175,13 +179,18 @@ def build_matrix(models: list[ManagedModel], existing: CommentedMap | None = Non
     existing = existing if isinstance(existing, CommentedMap) else CommentedMap()
     vars_map = CommentedMap(existing.get("vars") or {})
     managed_ids = {model.id for model in matrix_models}
+    removed_keys: set[str] = set()
     for existing_key, existing_model_id in list(vars_map.items()):
         if existing_model_id in managed_ids:
+            removed_keys.add(str(existing_key))
             del vars_map[existing_key]
     used: set[str] = set(vars_map.keys())
     support_keys: list[str] = []
     evict_costs = CommentedMap(existing.get("evict_costs") or {})
     sets = CommentedMap(existing.get("sets") or {})
+    for set_key, expression in list(sets.items()):
+        if _matrix_expression_refs_removed_key(expression, removed_keys):
+            del sets[set_key]
     model_keys: dict[str, str] = {}
     for model in matrix_models:
         key = model.matrix_key or default_matrix_key(model.id, used)
@@ -268,6 +277,149 @@ def _raw_command_path_errors(model: ManagedModel, settings: ManagerSettings, cmd
     return errors
 
 
+def _load_config_mapping(yaml_text: str) -> Mapping[Any, Any]:
+    if not yaml_text.strip():
+        return {}
+    document = YAML().load(yaml_text) or {}
+    return document if isinstance(document, Mapping) else {}
+
+
+def _as_mapping(value: Any) -> Mapping[Any, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _as_string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        return [str(item) for item in value]
+    return [str(value)]
+
+
+def _stringify_removed_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (str, int, float)):
+        return str(value)
+    output = StringIO()
+    yaml = YAML()
+    yaml.dump(value, output)
+    return output.getvalue().strip()
+
+
+def _add_removed_alias_changes(
+    changes: list[DestructiveChange],
+    current_models: Mapping[Any, Any],
+    staged_models: Mapping[Any, Any],
+) -> None:
+    for model_id, current_model in current_models.items():
+        if model_id not in staged_models:
+            continue
+        current_aliases = _as_string_list(_as_mapping(current_model).get("aliases"))
+        staged_aliases = set(_as_string_list(_as_mapping(staged_models[model_id]).get("aliases")))
+        for alias in current_aliases:
+            if alias not in staged_aliases:
+                changes.append(
+                    DestructiveChange(
+                        kind="alias_removed",
+                        path=f"models.{model_id}.aliases[{alias}]",
+                        before=alias,
+                    )
+                )
+
+
+def _add_removed_matrix_changes(
+    changes: list[DestructiveChange],
+    current_matrix: Mapping[Any, Any],
+    staged_matrix: Mapping[Any, Any],
+) -> None:
+    for section in ("vars", "sets"):
+        current_items = _as_mapping(current_matrix.get(section))
+        staged_items = _as_mapping(staged_matrix.get(section))
+        for key, value in current_items.items():
+            if key not in staged_items:
+                changes.append(
+                    DestructiveChange(
+                        kind="matrix_removed",
+                        path=f"matrix.{section}.{key}",
+                        before=_stringify_removed_value(value),
+                    )
+                )
+
+
+def _add_removed_preload_changes(
+    changes: list[DestructiveChange],
+    current_value: Any,
+    staged_value: Any,
+    path: str,
+) -> None:
+    staged_entries = set(_as_string_list(staged_value))
+    for model_id in _as_string_list(current_value):
+        if model_id not in staged_entries:
+            changes.append(DestructiveChange(kind="hook_removed", path=f"{path}[{model_id}]", before=model_id))
+
+
+def _add_removed_hook_changes(
+    changes: list[DestructiveChange],
+    current_hooks: Mapping[Any, Any],
+    staged_hooks: Mapping[Any, Any],
+    path: str = "hooks",
+) -> None:
+    for key, value in current_hooks.items():
+        child_path = f"{path}.{key}"
+        if key not in staged_hooks:
+            if child_path == "hooks.on_startup.preload":
+                _add_removed_preload_changes(changes, value, [], child_path)
+            else:
+                changes.append(
+                    DestructiveChange(
+                        kind="hook_removed",
+                        path=child_path,
+                        before=_stringify_removed_value(value),
+                    )
+                )
+            continue
+        staged_value = staged_hooks[key]
+        if child_path == "hooks.on_startup.preload":
+            _add_removed_preload_changes(changes, value, staged_value, child_path)
+        elif isinstance(value, Mapping):
+            _add_removed_hook_changes(changes, value, _as_mapping(staged_value), child_path)
+
+
+def detect_destructive_changes(current_yaml: str, staged_yaml: str) -> list[DestructiveChange]:
+    current = _load_config_mapping(current_yaml)
+    staged = _load_config_mapping(staged_yaml)
+    changes: list[DestructiveChange] = []
+
+    current_models = _as_mapping(current.get("models"))
+    staged_models = _as_mapping(staged.get("models"))
+    for model_id in current_models:
+        if model_id not in staged_models:
+            changes.append(
+                DestructiveChange(kind="model_removed", path=f"models.{model_id}", before=str(model_id))
+            )
+    _add_removed_alias_changes(changes, current_models, staged_models)
+
+    _add_removed_matrix_changes(changes, _as_mapping(current.get("matrix")), _as_mapping(staged.get("matrix")))
+    _add_removed_hook_changes(changes, _as_mapping(current.get("hooks")), _as_mapping(staged.get("hooks")))
+
+    for key in DESTRUCTIVE_GLOBAL_KEYS:
+        if key in current and key not in staged:
+            changes.append(
+                DestructiveChange(kind="global_removed", path=key, before=_stringify_removed_value(current[key]))
+            )
+
+    return changes
+
+
+def _destructive_warning(change: DestructiveChange) -> str:
+    return f"destructive change: {change.kind} at {change.path} removes {change.before}"
+
+
 def validate_config_document(document: dict, models: list[ManagedModel], settings: ManagerSettings) -> list[str]:
     errors: list[str] = []
     if "groups" in document:
@@ -302,6 +454,13 @@ def validate_config_document(document: dict, models: list[ManagedModel], setting
     for real_id in matrix_refs:
         if real_id not in model_ids:
             errors.append(f"matrix references unknown model: {real_id}")
+    matrix_vars = set((matrix.get("vars") or {}).keys())
+    matrix_sets = set((matrix.get("sets") or {}).keys())
+    allowed_matrix_refs = {str(item) for item in matrix_vars | matrix_sets}
+    for set_name, expression in (matrix.get("sets") or {}).items():
+        for ref in _matrix_expression_refs(expression):
+            if ref not in allowed_matrix_refs:
+                errors.append(f"matrix set {set_name} references unknown key: {ref}")
     for model_id in ((document.get("hooks") or {}).get("on_startup") or {}).get("preload", []):
         if model_id not in model_ids:
             errors.append(f"startup preload references unknown model: {model_id}")
@@ -369,11 +528,14 @@ def render_config(current_yaml: str, models: list[ManagedModel], settings: Manag
 def preview_config(current_yaml: str, models: list[ManagedModel], settings: ManagerSettings) -> ConfigPreviewResponse:
     warnings: list[str] = []
     errors: list[str] = []
+    destructive_changes: list[DestructiveChange] = []
     try:
         rendered = render_config(current_yaml, models, settings)
         yaml = YAML()
         document = yaml.load(rendered) or {}
         errors.extend(validate_config_document(document, models, settings))
+        destructive_changes = detect_destructive_changes(current_yaml, rendered)
+        warnings.extend(_destructive_warning(change) for change in destructive_changes)
     except Exception as exc:
         rendered = current_yaml
         errors.append(str(exc))
@@ -386,7 +548,14 @@ def preview_config(current_yaml: str, models: list[ManagedModel], settings: Mana
             lineterm="",
         )
     )
-    return ConfigPreviewResponse(valid=not errors, yaml=rendered, diff=diff, errors=errors, warnings=warnings)
+    return ConfigPreviewResponse(
+        valid=not errors,
+        yaml=rendered,
+        diff=diff,
+        errors=errors,
+        warnings=warnings,
+        destructive_changes=destructive_changes,
+    )
 
 
 def _unique_backup_path(backup_root: Path, prefix: str) -> Path:
@@ -406,7 +575,13 @@ def _overwrite_config_in_place(source: Path, target: Path) -> None:
         os.fsync(output_file.fileno())
 
 
-def backup_and_apply_config(config_path: str, backups_dir: str, rendered_yaml: str) -> Path:
+def backup_and_apply_config(
+    config_path: str,
+    backups_dir: str,
+    rendered_yaml: str,
+    retention_count: int = 0,
+    retention_days: int = 0,
+) -> Path:
     requested_config = Path(config_path)
     config = requested_config.resolve() if requested_config.is_symlink() else requested_config
     backup_root = Path(backups_dir)
@@ -439,7 +614,34 @@ def backup_and_apply_config(config_path: str, backups_dir: str, rendered_yaml: s
             if exc.errno != errno.EBUSY:
                 raise
             _overwrite_config_in_place(temp_path, config)
+        _prune_config_backups(backup_root, retention_count=retention_count, retention_days=retention_days)
     finally:
         if temp_path and temp_path.exists():
             temp_path.unlink()
     return backup
+
+
+def _matrix_expression_refs_removed_key(expression: Any, removed_keys: set[str]) -> bool:
+    if not removed_keys:
+        return False
+    return any(ref in removed_keys for ref in _matrix_expression_refs(expression))
+
+
+def _matrix_expression_refs(expression: Any) -> set[str]:
+    return {match.group(1) for match in MATRIX_REF_TOKEN.finditer(str(expression or ""))}
+
+
+def _prune_config_backups(backup_root: Path, retention_count: int = 0, retention_days: int = 0) -> None:
+    backups = sorted(backup_root.glob("config*.yaml"), key=lambda path: path.stat().st_mtime, reverse=True)
+    to_remove: set[Path] = set()
+    if retention_days > 0:
+        cutoff = datetime.now().timestamp() - timedelta(days=retention_days).total_seconds()
+        to_remove.update(path for path in backups if path.stat().st_mtime < cutoff)
+    if retention_count > 0:
+        retained = [path for path in backups if path not in to_remove]
+        to_remove.update(retained[retention_count:])
+    for path in to_remove:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass

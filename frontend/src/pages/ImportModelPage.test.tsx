@@ -10,6 +10,8 @@ const settingsPayload = {
   llama_swap_model_root: "/models",
   llama_swap_config_path: "/app/config.yaml",
   backups_dir: "/backups",
+  backup_retention_count: 0,
+  backup_retention_days: 0,
   download_temp_dir: "/tmp",
   data_dir: "/data",
   default_revision: "main",

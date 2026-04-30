@@ -37,6 +37,8 @@ class ManagerSettings(BaseModel):
     llama_swap_model_root: str = "/models"
     llama_swap_config_path: str = "/app/config.yaml"
     backups_dir: str = "/backups"
+    backup_retention_count: int = Field(default=0, ge=0)
+    backup_retention_days: int = Field(default=0, ge=0)
     download_temp_dir: str = "/data/tmp"
     data_dir: str = "/data"
     default_revision: str = "main"
@@ -87,6 +89,8 @@ def settings_from_env() -> ManagerSettings:
         llama_swap_model_root=os.getenv("LLAMA_SWAP_MODEL_ROOT", "/models"),
         llama_swap_config_path=os.getenv("LLAMA_SWAP_CONFIG_PATH", "/app/config.yaml"),
         backups_dir=os.getenv("BACKUPS_DIR", "/backups"),
+        backup_retention_count=int(os.getenv("BACKUP_RETENTION_COUNT", "0")),
+        backup_retention_days=int(os.getenv("BACKUP_RETENTION_DAYS", "0")),
         download_temp_dir=os.getenv("DOWNLOAD_TEMP_DIR", "/data/tmp"),
         data_dir=data_dir,
         max_parallel_downloads=int(os.getenv("MAX_PARALLEL_DOWNLOADS", "1")),

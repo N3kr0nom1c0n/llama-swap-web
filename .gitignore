@@ -35,6 +35,9 @@ dist/
 build/
 coverage/
 .vite/
+artifacts/qa/*
+!artifacts/qa/README.md
+artifacts/qa/playwright/
 
 # Runtime state
 data/

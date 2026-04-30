@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../test/testUtils";
 import { SettingsPage } from "./SettingsPage";
@@ -10,6 +10,8 @@ const settingsPayload = {
   llama_swap_model_root: "/models",
   llama_swap_config_path: "/app/config.yaml",
   backups_dir: "/backups",
+  backup_retention_count: 0,
+  backup_retention_days: 0,
   download_temp_dir: "/tmp",
   data_dir: "/data",
   default_revision: "main",
@@ -42,6 +44,7 @@ const settingsPayload = {
 
 describe("SettingsPage", () => {
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
   });
 
@@ -73,6 +76,19 @@ describe("SettingsPage", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/settings/hf-token", expect.objectContaining({ method: "PUT" })));
     expect(screen.queryByDisplayValue("hf_test_token")).not.toBeInTheDocument();
     expect(screen.getByDisplayValue("/app/.env")).toBeInTheDocument();
+  });
+
+  it("exposes backup retention settings in the paths section", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/settings") && !init?.method) return Promise.resolve(jsonResponse(settingsPayload));
+      return Promise.reject(new Error(`Unexpected fetch ${url}`));
+    });
+
+    renderWithProviders(<SettingsPage />);
+
+    expect(await screen.findByLabelText(/Backup retention count/)).toHaveValue(0);
+    expect(screen.getByLabelText(/Backup retention days/)).toHaveValue(0);
   });
 });
 

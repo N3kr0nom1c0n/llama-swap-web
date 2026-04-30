@@ -13,17 +13,27 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from ruamel.yaml import YAML
 
-from .config_service import backup_and_apply_config, manager_to_llama_path, preview_config, safe_join
+from .config_service import (
+    backup_and_apply_config,
+    detect_destructive_changes,
+    manager_to_llama_path,
+    preview_config,
+    safe_join,
+)
+from .config_import import import_candidates_from_config
 from .database import Database
 from .downloads import DownloadManager
+from .gpu_service import detect_gpus, gpu_status, recommend_tensor_split, validate_gpu_plan
 from .hf_service import resolve_hf_url
 from .schemas import (
     ConfigApplyRequest,
+    ConfigImportRequest,
     ConfigPreviewRequest,
     CreateModelFromDownloadRequest,
     DownloadRequest,
     FileInventoryItem,
     GpuDevice,
+    GpuRecommendationRequest,
     HfResolveRequest,
     HfTokenRequest,
     ImportDraftRequest,
@@ -102,6 +112,50 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     @app.put("/api/gpus", response_model=list[GpuDevice])
     def put_gpus(gpus: list[GpuDevice]) -> list[GpuDevice]:
         return db.save_gpus(gpus)
+
+    @app.get("/api/gpus/detect")
+    def detect_cuda_gpus() -> dict:
+        detected = detect_gpus()
+        if not detected.get("available"):
+            return detected
+        saved = {gpu.index: gpu for gpu in db.list_gpus()}
+        merged = []
+        for gpu in detected["gpus"]:
+            saved_gpu = saved.get(int(gpu["index"]))
+            merged.append(
+                {
+                    **gpu,
+                    "role": saved_gpu.role if saved_gpu else "",
+                    "notes": saved_gpu.notes if saved_gpu else "",
+                }
+            )
+        return {**detected, "gpus": merged}
+
+    @app.get("/api/gpus/status")
+    def cuda_gpu_status() -> dict:
+        return gpu_status()
+
+    @app.post("/api/gpus/recommend")
+    def recommend_cuda_plan(payload: GpuRecommendationRequest) -> dict:
+        detected = detect_gpus()
+        selected = payload.cuda_devices
+        if not detected.get("available"):
+            return {
+                "available": False,
+                "reason": detected.get("reason", "GPU detection unavailable"),
+                "recommendation": {
+                    "cuda_devices": selected,
+                    "main_gpu": selected[0] if selected else None,
+                    "tensor_split": "",
+                    "warnings": [detected.get("reason", "GPU detection unavailable")],
+                },
+            }
+        recommendation = recommend_tensor_split(detected["gpus"], selected)
+        recommendation["warnings"] = [
+            *recommendation.get("warnings", []),
+            *validate_gpu_plan(recommendation["cuda_devices"], recommendation["main_gpu"], recommendation["tensor_split"]),
+        ]
+        return {"available": True, "reason": "", "recommendation": recommendation}
 
     @app.post("/api/hf/resolve")
     def hf_resolve(payload: HfResolveRequest) -> dict:
@@ -216,11 +270,17 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         if not staged:
             raise HTTPException(status_code=404, detail="staged config not found; regenerate preview before applying")
         settings = db.get_settings()
-        _validate_staged_config_for_apply(db, staged, settings)
+        _validate_staged_config_for_apply(db, staged, settings, confirm_destructive=payload.confirm_destructive)
         if not db.claim_staged_config(payload.stage_id):
             raise HTTPException(status_code=409, detail="staged config was already applied; regenerate preview")
         try:
-            backup = backup_and_apply_config(settings.llama_swap_config_path, settings.backups_dir, staged["yaml"])
+            backup = backup_and_apply_config(
+                settings.llama_swap_config_path,
+                settings.backups_dir,
+                staged["yaml"],
+                retention_count=settings.backup_retention_count,
+                retention_days=settings.backup_retention_days,
+            )
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=409, detail=f"could not apply staged config: {exc}") from exc
         return {
@@ -229,6 +289,29 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             "restart_required": True,
             "restart_note": "Config applied. Restart llama-swap manually: docker compose restart llama-swap",
         }
+
+    @app.get("/api/config/import-candidates")
+    def config_import_candidates() -> list[dict]:
+        settings = db.get_settings()
+        current = _read_current_config(settings.llama_swap_config_path)
+        candidates = import_candidates_from_config(current, settings)
+        return [candidate.model_dump(mode="json") for candidate in candidates]
+
+    @app.post("/api/config/import-candidates")
+    def config_import_selected(payload: ConfigImportRequest) -> list[dict]:
+        settings = db.get_settings()
+        current = _read_current_config(settings.llama_swap_config_path)
+        candidates = import_candidates_from_config(current, settings)
+        selected_ids = set(payload.candidate_ids)
+        selected = [candidate for candidate in candidates if not selected_ids or candidate.id in selected_ids]
+        imported = []
+        existing_ids = {model.id for model in db.list_models()}
+        for candidate in selected:
+            model = candidate.model
+            model.id = _unique_import_id(model.id, existing_ids)
+            imported.append(db.save_model(model).model_dump(mode="json"))
+            existing_ids.add(model.id)
+        return imported
 
     @app.post("/api/uploads")
     async def upload_file(role: str, file: UploadFile, model_name: str = "") -> dict:
@@ -370,6 +453,16 @@ def _select_models_for_preview(models: list[ManagedModel], model_ids: list[str])
     return [model for model in models if model.id in requested]
 
 
+def _unique_import_id(base_id: str, existing_ids: set[str]) -> str:
+    candidate = base_id or "imported-model"
+    if candidate not in existing_ids:
+        return candidate
+    counter = 2
+    while f"{candidate}-{counter}" in existing_ids:
+        counter += 1
+    return f"{candidate}-{counter}"
+
+
 def _read_current_config(config_path: str) -> str:
     path = Path(config_path)
     if not path.exists():
@@ -380,7 +473,12 @@ def _read_current_config(config_path: str) -> str:
         raise HTTPException(status_code=400, detail=f"could not read current config: {exc}") from exc
 
 
-def _validate_staged_config_for_apply(db: Database, staged: dict, settings: ManagerSettings) -> None:
+def _validate_staged_config_for_apply(
+    db: Database,
+    staged: dict,
+    settings: ManagerSettings,
+    confirm_destructive: bool = False,
+) -> None:
     if staged.get("applied_at"):
         raise HTTPException(status_code=409, detail="staged config was already applied; regenerate preview")
     try:
@@ -403,6 +501,16 @@ def _validate_staged_config_for_apply(db: Database, staged: dict, settings: Mana
         current_fingerprint = _stage_fingerprint(current, models, settings)
         if current_fingerprint != fingerprint:
             raise HTTPException(status_code=409, detail="staged config is stale; regenerate preview")
+    if not confirm_destructive:
+        try:
+            destructive_changes = detect_destructive_changes(current, staged_yaml)
+        except Exception as exc:
+            raise HTTPException(status_code=409, detail=f"could not validate destructive config diff: {exc}") from exc
+        if destructive_changes:
+            raise HTTPException(
+                status_code=409,
+                detail=f"destructive config changes blocked; confirm destructive apply to continue ({len(destructive_changes)} change(s))",
+            )
 
 
 def _models_for_stage(db: Database, staged: dict) -> list[ManagedModel]:

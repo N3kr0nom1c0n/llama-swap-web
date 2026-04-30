@@ -244,6 +244,17 @@ Backend:
 Frontend:
 
 ```sh
-npm test -- --run
+npm test
 npm run build
 ```
+
+Browser smoke tests run against an already-running native app or container. The default target is `http://127.0.0.1:8081`; override it with `BASE_URL` when needed:
+
+```sh
+npx playwright install chromium
+ALLOW_E2E_MUTATIONS=1 BASE_URL=http://127.0.0.1:8081 npm run e2e -- --project=chromium
+```
+
+Only set `ALLOW_E2E_MUTATIONS=1` against a disposable test container because the smoke creates a QA model entry. Playwright reports, traces, screenshots, and endpoint smoke snapshots are written under `artifacts/qa/`.
+
+CI runs backend tests, frontend tests, frontend build, Docker build, Compose config validation, and a temp-mounted container smoke. The Docker publish workflow runs release QA before publishing; pull requests build without publishing, pushes to `main` publish `ghcr.io/n3kr0nom1c0n/llama-swap-web:latest`, and `v*` tags publish version tags.

@@ -26,6 +26,7 @@ frontend/dist
 dist
 build
 coverage
+artifacts/qa
 .DS_Store
 docs
 backups

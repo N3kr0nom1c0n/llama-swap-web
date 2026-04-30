@@ -1,6 +1,7 @@
 import errno
 import os
 import shlex
+import time
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from app.config_service import (
     backup_and_apply_config,
     build_llama_command,
+    detect_destructive_changes,
     manager_to_llama_path,
     preview_config,
     safe_join,
@@ -147,6 +149,9 @@ models:
   chat:
     cmd: |
       /app/llama-server --port ${PORT} -m /models/chat/old.gguf
+  external:
+    cmd: |
+      /app/llama-server --port ${PORT} -m /models/chat/external.gguf
 matrix:
   vars:
     c: chat
@@ -159,6 +164,46 @@ matrix:
     assert result.valid
     assert result.yaml.count("c: chat") == 1
     assert result.yaml.count("c_set: c") == 1
+
+
+def test_preview_removes_stale_matrix_sets_when_managed_key_changes(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    (tmp_path / "models").mkdir()
+    model = ManagedModel(
+        id="chat",
+        display_name="Chat",
+        primary_model_file="/models/chat/chat.gguf",
+        matrix_key="new",
+        matrix_behavior="runs_alone",
+    )
+    current = """
+models:
+  chat:
+    cmd: |
+      /app/llama-server --port ${PORT} -m /models/chat/old.gguf
+  external:
+    cmd: |
+      /app/llama-server --port ${PORT} -m /models/chat/external.gguf
+matrix:
+  vars:
+    old: chat
+    ext: external
+  sets:
+    old_set: old
+    combo: old & +ext
+    ext_set: ext
+"""
+
+    result = preview_config(current, [model], settings)
+
+    assert result.valid
+    assert "old: chat" not in result.yaml
+    assert "old_set: old" not in result.yaml
+    assert "combo: old & +ext" not in result.yaml
+    assert "ext: external" in result.yaml
+    assert "ext_set: ext" in result.yaml
+    assert "new: chat" in result.yaml
+    assert "new_set: new" in result.yaml
 
 
 def test_preview_preserves_custom_hooks_when_updating_preload(tmp_path: Path) -> None:
@@ -222,6 +267,108 @@ hooks:
     assert "- existing-support" in result.yaml
     assert "- chat" not in result.yaml
     assert "shell: echo custom" in result.yaml
+
+
+def test_preview_reports_structured_destructive_changes(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    model = ManagedModel(
+        id="chat",
+        display_name="Chat",
+        primary_model_file="/models/chat/chat.gguf",
+        matrix_key="new",
+        matrix_behavior="runs_alone",
+        startup_preload=False,
+    )
+    current = """
+models:
+  chat:
+    aliases:
+      - old-chat
+    cmd: /app/llama-server --port ${PORT} -m /models/chat/old.gguf
+  external-support:
+    cmd: /app/llama-server --port ${PORT} -m /models/aux/support.gguf
+matrix:
+  vars:
+    old: chat
+  sets:
+    old_set: old
+hooks:
+  on_startup:
+    preload:
+      - chat
+      - external-support
+"""
+
+    result = preview_config(current, [model], settings)
+
+    changes = [change.model_dump() for change in result.destructive_changes]
+    assert result.valid
+    assert {
+        "kind": "alias_removed",
+        "path": "models.chat.aliases[old-chat]",
+        "before": "old-chat",
+    } in changes
+    assert {
+        "kind": "matrix_removed",
+        "path": "matrix.vars.old",
+        "before": "chat",
+    } in changes
+    assert {
+        "kind": "hook_removed",
+        "path": "hooks.on_startup.preload[chat]",
+        "before": "chat",
+    } in changes
+    assert any("destructive change" in warning for warning in result.warnings)
+
+
+def test_detect_destructive_changes_finds_removed_models_matrix_sets_hooks_and_globals() -> None:
+    current = """
+healthCheckTimeout: 180
+logLevel: debug
+sendLoadingState: true
+includeAliasesInList: false
+models:
+  removed:
+    aliases:
+      - gone
+    cmd: /app/llama-server --port ${PORT} -m /models/removed.gguf
+matrix:
+  vars:
+    r: removed
+  sets:
+    removed_set: r
+hooks:
+  on_startup:
+    shell: echo boot
+    preload:
+      - removed
+  on_model_load:
+    shell: echo load
+"""
+    staged = "models: {}\nmatrix:\n  vars: {}\n  sets: {}\nhooks:\n  on_startup: {}\n"
+
+    changes = [change.model_dump() for change in detect_destructive_changes(current, staged)]
+
+    assert {
+        "kind": "model_removed",
+        "path": "models.removed",
+        "before": "removed",
+    } in changes
+    assert {
+        "kind": "matrix_removed",
+        "path": "matrix.sets.removed_set",
+        "before": "r",
+    } in changes
+    assert {
+        "kind": "hook_removed",
+        "path": "hooks.on_model_load",
+        "before": "shell: echo load",
+    } in changes
+    assert {
+        "kind": "global_removed",
+        "path": "healthCheckTimeout",
+        "before": "180",
+    } in changes
 
 
 def test_preview_rejects_host_paths_in_command() -> None:
@@ -481,3 +628,31 @@ def test_backup_and_apply_preserves_config_symlink(tmp_path: Path) -> None:
     assert link_config.is_symlink()
     assert backup.read_text(encoding="utf-8") == "models: {}\n"
     assert real_config.read_text(encoding="utf-8") == "models:\n  chat: {}\n"
+
+
+def test_backup_and_apply_prunes_backups_by_count_and_age(tmp_path: Path) -> None:
+    config = tmp_path / "config.yaml"
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    config.write_text("models: {}\n", encoding="utf-8")
+    old = backups / "config-20000101-000000-000000.yaml"
+    recent = backups / "config-20990101-000000-000000.yaml"
+    unrelated = backups / "notes.txt"
+    old.write_text("old", encoding="utf-8")
+    recent.write_text("recent", encoding="utf-8")
+    unrelated.write_text("notes", encoding="utf-8")
+    os.utime(old, (time.time() - 3 * 24 * 60 * 60, time.time() - 3 * 24 * 60 * 60))
+
+    backup_and_apply_config(
+        str(config),
+        str(backups),
+        "models:\n  chat: {}\n",
+        retention_count=2,
+        retention_days=1,
+    )
+
+    config_backups = sorted(path.name for path in backups.glob("config*.yaml"))
+    assert len(config_backups) == 2
+    assert recent.name in config_backups
+    assert not old.exists()
+    assert unrelated.exists()

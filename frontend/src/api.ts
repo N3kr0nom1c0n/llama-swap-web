@@ -1,9 +1,12 @@
 import type {
   ApplyResponse,
+  ConfigImportCandidate,
   CreateModelFromDownloadPayload,
   ConfigPreviewResponse,
+  GpuDetectionResponse,
   DownloadJob,
   GpuDevice,
+  GpuRecommendationResponse,
   HfResolveResponse,
   ManagedModel,
   ManagerSettings,
@@ -40,6 +43,10 @@ export const api = {
   clearHfToken: () => request<ManagerSettings>("/api/settings/hf-token", { method: "DELETE" }),
   gpus: () => request<GpuDevice[]>("/api/gpus"),
   saveGpus: (gpus: GpuDevice[]) => request<GpuDevice[]>("/api/gpus", { method: "PUT", body: JSON.stringify(gpus) }),
+  detectGpus: () => request<GpuDetectionResponse>("/api/gpus/detect"),
+  gpuStatus: () => request<GpuDetectionResponse & { processes: unknown[] }>("/api/gpus/status"),
+  recommendGpus: (cudaDevices: number[]) =>
+    request<GpuRecommendationResponse>("/api/gpus/recommend", { method: "POST", body: JSON.stringify({ cuda_devices: cudaDevices }) }),
   resolveHf: (url: string, revision: string) =>
     request<HfResolveResponse>("/api/hf/resolve", { method: "POST", body: JSON.stringify({ url, revision }) }),
   createImport: (payload: {
@@ -72,8 +79,11 @@ export const api = {
     }),
   previewConfig: (modelIds: string[] = []) =>
     request<ConfigPreviewResponse>("/api/config/preview", { method: "POST", body: JSON.stringify({ model_ids: modelIds }) }),
-  applyConfig: (stageId: string) =>
-    request<ApplyResponse>("/api/config/apply", { method: "POST", body: JSON.stringify({ stage_id: stageId }) }),
+  applyConfig: (stageId: string, confirmDestructive = false) =>
+    request<ApplyResponse>("/api/config/apply", { method: "POST", body: JSON.stringify({ stage_id: stageId, confirm_destructive: confirmDestructive }) }),
+  configImportCandidates: () => request<ConfigImportCandidate[]>("/api/config/import-candidates"),
+  importConfigCandidates: (candidateIds: string[]) =>
+    request<ManagedModel[]>("/api/config/import-candidates", { method: "POST", body: JSON.stringify({ candidate_ids: candidateIds }) }),
   upload: (role: ModelRole, file: File) => {
     const formData = new FormData();
     formData.append("file", file);

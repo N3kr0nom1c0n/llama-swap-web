@@ -152,6 +152,12 @@ export function SettingsPage() {
           <Field label="Backups dir">
             <input value={draft.backups_dir} onChange={(event) => update({ backups_dir: event.target.value })} />
           </Field>
+          <Field label="Backup retention count" hint="0 keeps every config backup">
+            <input type="number" value={draft.backup_retention_count} onChange={(event) => update({ backup_retention_count: Number(event.target.value) })} />
+          </Field>
+          <Field label="Backup retention days" hint="0 disables age-based cleanup">
+            <input type="number" value={draft.backup_retention_days} onChange={(event) => update({ backup_retention_days: Number(event.target.value) })} />
+          </Field>
           <Field label="Download temp dir">
             <input value={draft.download_temp_dir} onChange={(event) => update({ download_temp_dir: event.target.value })} />
           </Field>

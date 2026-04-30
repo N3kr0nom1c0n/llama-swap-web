@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Iterator
 
+from .migrations import initialize_schema
 from .schemas import DownloadJob, GpuDevice, ManagedModel
 from .settings import ManagerSettings, settings_from_env
 
@@ -32,48 +33,7 @@ class Database:
 
     def init(self) -> None:
         with self.connect() as conn:
-            conn.executescript(
-                """
-                create table if not exists settings (
-                  key text primary key,
-                  value text not null
-                );
-                create table if not exists gpus (
-                  idx integer primary key,
-                  payload text not null
-                );
-                create table if not exists models (
-                  id text primary key,
-                  payload text not null,
-                  created_at text not null,
-                  updated_at text not null
-                );
-                create table if not exists model_files (
-                  id integer primary key autoincrement,
-                  model_id text not null,
-                  manager_path text not null,
-                  container_path text not null,
-                  kind text not null
-                );
-                create table if not exists download_jobs (
-                  id text primary key,
-                  payload text not null,
-                  created_at text not null,
-                  updated_at text not null
-                );
-                create table if not exists staged_configs (
-                  id text primary key,
-                  yaml text not null,
-                  diff text not null,
-                  created_at text not null,
-                  expires_at text,
-                  fingerprint text not null default '',
-                  model_ids text not null default '[]',
-                  applied_at text
-                );
-                """
-            )
-            self._migrate_staged_configs(conn)
+            initialize_schema(conn)
             if not conn.execute("select 1 from settings where key = 'settings'").fetchone():
                 settings = settings_from_env()
                 conn.execute(
@@ -89,18 +49,6 @@ class Database:
                         "insert into gpus(idx, payload) values(?, ?)",
                         (gpu.index, gpu.model_dump_json()),
                     )
-
-    def _migrate_staged_configs(self, conn: sqlite3.Connection) -> None:
-        columns = {row["name"] for row in conn.execute("pragma table_info(staged_configs)").fetchall()}
-        migrations = {
-            "expires_at": "alter table staged_configs add column expires_at text",
-            "fingerprint": "alter table staged_configs add column fingerprint text not null default ''",
-            "model_ids": "alter table staged_configs add column model_ids text not null default '[]'",
-            "applied_at": "alter table staged_configs add column applied_at text",
-        }
-        for column, statement in migrations.items():
-            if column not in columns:
-                conn.execute(statement)
 
     def get_settings(self) -> ManagerSettings:
         with self.connect() as conn:
