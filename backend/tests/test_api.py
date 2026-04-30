@@ -23,6 +23,29 @@ def test_state_initializes_db_and_redacts_hf_token(tmp_path: Path, monkeypatch) 
     assert "secret-token" not in response.text
 
 
+def test_hf_token_can_be_saved_and_cleared_without_echo(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    env_file = tmp_path / ".env"
+    monkeypatch.setenv("MANAGER_ENV_FILE", str(env_file))
+    app = create_app(tmp_path / "manager.db")
+    client = TestClient(app)
+
+    saved = client.put("/api/settings/hf-token", json={"token": "hf_secret_token"})
+    settings = client.get("/api/settings")
+
+    assert saved.status_code == 200
+    assert saved.json()["hf_token_configured"] is True
+    assert saved.json()["hf_token"] == "***"
+    assert saved.json()["hf_token_source"] == str(env_file)
+    assert "hf_secret_token" not in saved.text
+    assert "hf_secret_token" not in settings.text
+    assert "HF_TOKEN=hf_secret_token" in env_file.read_text(encoding="utf-8")
+    cleared = client.delete("/api/settings/hf-token")
+    assert cleared.status_code == 200
+    assert cleared.json()["hf_token_configured"] is False
+    assert "HF_TOKEN" not in env_file.read_text(encoding="utf-8")
+
+
 def test_create_model_maps_manager_files_to_container_paths(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("MANAGER_MODEL_ROOT", str(tmp_path / "models"))
     monkeypatch.setenv("LLAMA_SWAP_MODEL_ROOT", "/models")

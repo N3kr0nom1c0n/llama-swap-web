@@ -41,6 +41,7 @@ export interface ManagerSettings {
   defaults: Defaults;
   hf_token_configured?: boolean;
   hf_token?: string;
+  hf_token_source?: string;
 }
 
 export interface GpuDevice {
@@ -105,6 +106,9 @@ export interface DownloadJob {
   written_files: string[];
   container_files: string[];
   progress: number;
+  bytes_downloaded: number;
+  bytes_total: number;
+  active_file: string;
   logs: string[];
   error: string;
   created_at?: string | null;

@@ -6,6 +6,9 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 
+HF_TOKEN_KEY = "HF_TOKEN"
+
+
 class RoleDirectories(BaseModel):
     reasoning: str = "/models/reasoning"
     chat: str = "/models/chat"
@@ -45,12 +48,13 @@ class ManagerSettings(BaseModel):
 
     @property
     def hf_token_configured(self) -> bool:
-        return bool(os.getenv("HF_TOKEN"))
+        return bool(get_hf_token(self))
 
     def public_dict(self) -> dict:
         payload = self.model_dump()
         payload["hf_token_configured"] = self.hf_token_configured
         payload["hf_token"] = "***" if self.hf_token_configured else ""
+        payload["hf_token_source"] = hf_token_source(self)
         return payload
 
 
@@ -85,3 +89,104 @@ def default_db_path(settings: ManagerSettings | None = None) -> Path:
     except OSError:
         data_dir = Path.cwd() / "data"
     return data_dir / "manager.db"
+
+
+def hf_token_env_file(settings: ManagerSettings | None = None) -> Path:
+    configured = os.getenv("MANAGER_ENV_FILE") or os.getenv("HF_TOKEN_FILE")
+    if configured:
+        return Path(configured)
+    app_env = Path("/app/.env")
+    if app_env.exists() or app_env.parent.exists():
+        return app_env
+    settings = settings or settings_from_env()
+    return Path(settings.data_dir) / ".env"
+
+
+def get_hf_token(settings: ManagerSettings | None = None) -> str:
+    file_token = _read_env_token(hf_token_env_file(settings))
+    if file_token:
+        return file_token
+    return os.getenv(HF_TOKEN_KEY, "")
+
+
+def hf_token_source(settings: ManagerSettings | None = None) -> str:
+    file_path = hf_token_env_file(settings)
+    if _read_env_token(file_path):
+        return str(file_path)
+    if os.getenv(HF_TOKEN_KEY):
+        return "environment"
+    return ""
+
+
+def save_hf_token(token: str, settings: ManagerSettings | None = None) -> Path:
+    token = token.strip()
+    if not token:
+        raise ValueError("HF token cannot be empty")
+    if "\n" in token or "\r" in token:
+        raise ValueError("HF token cannot contain newlines")
+    path = hf_token_env_file(settings)
+    _write_env_token(path, token)
+    os.environ[HF_TOKEN_KEY] = token
+    return path
+
+
+def clear_hf_token(settings: ManagerSettings | None = None) -> Path:
+    path = hf_token_env_file(settings)
+    _write_env_token(path, "")
+    os.environ.pop(HF_TOKEN_KEY, None)
+    return path
+
+
+def _read_env_token(path: Path) -> str:
+    if not path.exists():
+        return ""
+    token = ""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    for line in lines:
+        key, value = _parse_env_line(line)
+        if key == HF_TOKEN_KEY:
+            token = value
+    return token
+
+
+def _write_env_token(path: Path, token: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True) if path.exists() else []
+    next_lines: list[str] = []
+    replaced = False
+    for line in lines:
+        key, _value = _parse_env_line(line)
+        if key == HF_TOKEN_KEY:
+            replaced = True
+            if token:
+                next_lines.append(f"{HF_TOKEN_KEY}={token}\n")
+            continue
+        next_lines.append(line)
+    if token and not replaced:
+        if next_lines and not next_lines[-1].endswith("\n"):
+            next_lines[-1] += "\n"
+        next_lines.append(f"{HF_TOKEN_KEY}={token}\n")
+    path.write_text("".join(next_lines), encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+
+
+def _parse_env_line(line: str) -> tuple[str, str]:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return "", ""
+    if stripped.startswith("export "):
+        stripped = stripped[7:].strip()
+    if "=" not in stripped:
+        return "", ""
+    key, value = stripped.split("=", 1)
+    key = key.strip()
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        value = value[1:-1]
+    return key, value

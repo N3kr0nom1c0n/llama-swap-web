@@ -1,17 +1,62 @@
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+.envrc
+*.pem
+*.key
+*.crt
+*.p12
+*.token
+secrets/
+
+# Local Docker overrides
+compose.yml
+compose.override.yml
+docker-compose.yml
+docker-compose.override.yml
+
+# Python
 .venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Node / frontend
 node_modules/
 frontend/node_modules/
 frontend/dist/
 dist/
+build/
+coverage/
+.vite/
+
+# Runtime state
 data/
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-__pycache__/
-*.py[cod]
+backups/
+logs/
+tmp/
 *.db
 *.db-*
-.env
-!.env.example
-.DS_Store
+*.sqlite
+*.sqlite-*
+*.log
 
+# Model artifacts
+models/
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.onnx
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/

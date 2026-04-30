@@ -7,7 +7,7 @@ import { Field } from "../components/Field";
 import { PageHeader } from "../components/PageHeader";
 import { JobStatusPill, StatusPill } from "../components/StatusPill";
 import { queryKeys } from "../queryKeys";
-import type { HfFile, ManagedModel, ModelRole } from "../types";
+import type { DownloadJob, HfFile, ManagedModel, ModelRole } from "../types";
 import { emptyModel, modelRoles } from "../types";
 import { defaultTtlForRole, modelCommand, safeMatrixKey } from "../utils";
 
@@ -257,11 +257,12 @@ export function ImportModelPage() {
             <thead>
               <tr>
                 <th>Status</th>
-                <th>Repo</th>
-                <th>Files</th>
-                <th>Destination</th>
-                <th>Actions</th>
-              </tr>
+                  <th>Repo</th>
+                  <th>Files</th>
+                  <th>Progress</th>
+                  <th>Destination</th>
+                  <th>Actions</th>
+                </tr>
             </thead>
             <tbody>
               {jobs.data?.map((queuedJob) => (
@@ -269,6 +270,9 @@ export function ImportModelPage() {
                   <td><JobStatusPill status={queuedJob.status} /></td>
                   <td>{queuedJob.repo_id || "-"}</td>
                   <td>{queuedJob.files.length}</td>
+                  <td>
+                    <QueueProgress job={queuedJob} />
+                  </td>
                   <td className="truncate">{queuedJob.destination_dir}</td>
                   <td>
                     <div className="inline-actions compact">
@@ -333,4 +337,42 @@ export function ImportModelPage() {
       </section>
     </div>
   );
+}
+
+function QueueProgress({ job }: { job: DownloadJob }) {
+  const repo = job.repo_id || job.id;
+  const value = Math.min(100, Math.max(0, Math.round(job.progress || 0)));
+  const hasBytes = job.bytes_total > 0;
+  return (
+    <div className="queue-progress">
+      <div className="queue-progress-main">
+        <div
+          className="queue-progress-track"
+          role="progressbar"
+          aria-label={`Download progress for ${repo}`}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={value}
+        >
+          <span style={{ width: `${value}%` }} />
+        </div>
+        {hasBytes ? <span className="queue-progress-detail">{formatBytes(job.bytes_downloaded)} / {formatBytes(job.bytes_total)}</span> : null}
+        {job.active_file ? <span className="queue-progress-detail truncate">{job.active_file}</span> : null}
+      </div>
+      <span className="queue-progress-value">{value}%</span>
+    </div>
+  );
+}
+
+function formatBytes(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let size = value;
+  let index = 0;
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024;
+    index += 1;
+  }
+  const precision = index === 0 || size >= 10 ? 0 : 1;
+  return `${size.toFixed(precision)} ${units[index]}`;
 }

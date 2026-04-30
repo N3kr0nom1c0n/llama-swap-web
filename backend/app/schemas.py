@@ -98,6 +98,9 @@ class DownloadJob(BaseModel):
     written_files: list[str] = Field(default_factory=list)
     container_files: list[str] = Field(default_factory=list)
     progress: float = 0
+    bytes_downloaded: int = 0
+    bytes_total: int = 0
+    active_file: str = ""
     logs: list[str] = Field(default_factory=list)
     error: str = ""
     created_at: datetime | None = None

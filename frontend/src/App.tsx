@@ -3,6 +3,7 @@ import { Layout } from "./Layout";
 import { ConfigPreviewPage } from "./pages/ConfigPreviewPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { GpuPlannerPage } from "./pages/GpuPlannerPage";
+import { HelpPage } from "./pages/HelpPage";
 import { ImportModelPage } from "./pages/ImportModelPage";
 import { ModelsPage } from "./pages/ModelsPage";
 import { SettingsPage } from "./pages/SettingsPage";
@@ -17,6 +18,7 @@ export function App() {
         <Route path="gpus" element={<GpuPlannerPage />} />
         <Route path="config" element={<ConfigPreviewPage />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="help" element={<HelpPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

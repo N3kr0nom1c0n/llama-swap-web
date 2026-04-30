@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { Activity, Cpu, FileCode2, Gauge, HardDriveDownload, LayoutDashboard, Settings, Server } from "lucide-react";
+import { Activity, CircleHelp, Cpu, FileCode2, Gauge, HardDriveDownload, LayoutDashboard, Settings, Server } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
 import { queryKeys } from "./queryKeys";
@@ -12,6 +12,7 @@ const navItems = [
   { to: "/gpus", label: "GPU Planner", icon: Cpu },
   { to: "/config", label: "Config Preview", icon: FileCode2 },
   { to: "/settings", label: "Settings", icon: Settings },
+  { to: "/help", label: "Help", icon: CircleHelp },
 ];
 
 export function Layout() {

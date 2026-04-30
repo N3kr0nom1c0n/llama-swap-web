@@ -34,6 +34,9 @@ export const api = {
   settings: () => request<ManagerSettings>("/api/settings"),
   saveSettings: (settings: ManagerSettings) =>
     request<ManagerSettings>("/api/settings", { method: "PUT", body: JSON.stringify(stripUiOnlySettings(settings)) }),
+  saveHfToken: (token: string) =>
+    request<ManagerSettings>("/api/settings/hf-token", { method: "PUT", body: JSON.stringify({ token }) }),
+  clearHfToken: () => request<ManagerSettings>("/api/settings/hf-token", { method: "DELETE" }),
   gpus: () => request<GpuDevice[]>("/api/gpus"),
   saveGpus: (gpus: GpuDevice[]) => request<GpuDevice[]>("/api/gpus", { method: "PUT", body: JSON.stringify(gpus) }),
   resolveHf: (url: string, revision: string) =>
@@ -76,7 +79,7 @@ export const api = {
 };
 
 function stripUiOnlySettings(settings: ManagerSettings): ManagerSettings {
-  const { hf_token: _hfToken, hf_token_configured: _hfTokenConfigured, ...safeSettings } = settings;
+  const { hf_token: _hfToken, hf_token_configured: _hfTokenConfigured, hf_token_source: _hfTokenSource, ...safeSettings } = settings;
   return safeSettings;
 }
 

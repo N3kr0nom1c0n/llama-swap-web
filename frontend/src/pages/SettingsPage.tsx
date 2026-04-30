@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Save } from "lucide-react";
+import { KeyRound, Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { Field } from "../components/Field";
@@ -12,6 +12,7 @@ export function SettingsPage() {
   const queryClient = useQueryClient();
   const settings = useQuery({ queryKey: queryKeys.settings, queryFn: api.settings });
   const [draft, setDraft] = useState<ManagerSettings | null>(null);
+  const [hfToken, setHfToken] = useState("");
 
   useEffect(() => {
     if (settings.data) setDraft(settings.data);
@@ -23,6 +24,24 @@ export function SettingsPage() {
       queryClient.setQueryData(queryKeys.settings, data);
       void queryClient.invalidateQueries({ queryKey: queryKeys.state });
       void queryClient.invalidateQueries({ queryKey: queryKeys.preview });
+    },
+  });
+  const saveToken = useMutation({
+    mutationFn: api.saveHfToken,
+    onSuccess: (data) => {
+      setHfToken("");
+      setDraft(data);
+      queryClient.setQueryData(queryKeys.settings, data);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.state });
+    },
+  });
+  const clearToken = useMutation({
+    mutationFn: api.clearHfToken,
+    onSuccess: (data) => {
+      setHfToken("");
+      setDraft(data);
+      queryClient.setQueryData(queryKeys.settings, data);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.state });
     },
   });
 
@@ -56,7 +75,7 @@ export function SettingsPage() {
       <section className="panel">
         <div className="panel-header">
           <h2>Runtime</h2>
-          <StatusPill tone={draft.hf_token_configured ? "ok" : "warn"}>{draft.hf_token_configured ? "HF_TOKEN from env" : "HF_TOKEN not configured"}</StatusPill>
+          <StatusPill tone={draft.hf_token_configured ? "ok" : "warn"}>{draft.hf_token_configured ? "HF token configured" : "HF token not configured"}</StatusPill>
         </div>
         <div className="form-grid">
           <Field label="App host">
@@ -78,6 +97,42 @@ export function SettingsPage() {
             <input value={draft.llama_server_cmd} onChange={(event) => update({ llama_server_cmd: event.target.value })} />
           </Field>
         </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <h2>Hugging Face</h2>
+          <StatusPill tone={draft.hf_token_configured ? "ok" : "warn"}>{draft.hf_token_configured ? "Configured" : "Public only"}</StatusPill>
+        </div>
+        <div className="form-grid wide">
+          <Field label="HF API token">
+            <input
+              type="password"
+              value={hfToken}
+              placeholder={draft.hf_token_configured ? "Configured; paste a new token to replace" : "hf_..."}
+              autoComplete="off"
+              onChange={(event) => setHfToken(event.target.value)}
+            />
+          </Field>
+          <Field label="Token source">
+            <input value={draft.hf_token_source || "not configured"} readOnly disabled />
+          </Field>
+        </div>
+        <div className="inline-actions">
+          <button className="button" type="button" onClick={() => saveToken.mutate(hfToken)} disabled={saveToken.isPending || !hfToken.trim()}>
+            <KeyRound size={16} aria-hidden="true" />
+            Save Token
+          </button>
+          <button className="button secondary" type="button" onClick={() => clearToken.mutate()} disabled={clearToken.isPending || !draft.hf_token_configured}>
+            <Trash2 size={16} aria-hidden="true" />
+            Clear Token
+          </button>
+        </div>
+        <p className="field-hint">The token is saved to the manager env file and is never returned by the API.</p>
+        {saveToken.error ? <p className="form-error">{saveToken.error.message}</p> : null}
+        {clearToken.error ? <p className="form-error">{clearToken.error.message}</p> : null}
+        {saveToken.isSuccess ? <p className="form-success">HF token saved.</p> : null}
+        {clearToken.isSuccess ? <p className="form-success">HF token cleared.</p> : null}
       </section>
 
       <section className="panel">
@@ -161,7 +216,6 @@ export function SettingsPage() {
             </div>
           </Field>
         </div>
-        <p className="field-hint">Hugging Face token value is never rendered. This page only shows whether the environment token is configured.</p>
         {save.error ? <p className="form-error">{save.error.message}</p> : null}
         {save.isSuccess ? <p className="form-success">Settings saved.</p> : null}
       </section>

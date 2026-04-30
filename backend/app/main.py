@@ -22,7 +22,7 @@ from .schemas import (
     ManagedModel,
     StateResponse,
 )
-from .settings import ManagerSettings, default_db_path
+from .settings import ManagerSettings, clear_hf_token, default_db_path, get_hf_token, save_hf_token
 
 
 def create_app(db_path: str | Path | None = None) -> FastAPI:
@@ -61,7 +61,26 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
 
     @app.put("/api/settings")
     def put_settings(settings: ManagerSettings) -> dict:
-        return db.save_settings(settings).public_dict()
+        saved = db.save_settings(settings)
+        app.state.download_manager.settings = saved
+        return saved.public_dict()
+
+    @app.put("/api/settings/hf-token")
+    def put_hf_token(payload: dict) -> dict:
+        token = str(payload.get("token", ""))
+        try:
+            save_hf_token(token, db.get_settings())
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return db.get_settings().public_dict()
+
+    @app.delete("/api/settings/hf-token")
+    def delete_hf_token() -> dict:
+        try:
+            clear_hf_token(db.get_settings())
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return db.get_settings().public_dict()
 
     @app.get("/api/gpus", response_model=list[GpuDevice])
     def get_gpus() -> list[GpuDevice]:
@@ -77,7 +96,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         url = payload.get("url", "")
         revision = payload.get("revision") or settings.default_revision
         try:
-            return resolve_hf_url(url, revision=revision).model_dump()
+            return resolve_hf_url(url, revision=revision, token=get_hf_token(settings) or None).model_dump()
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -14,6 +14,12 @@ __pycache__
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.crt
+*.p12
+*.token
+secrets
 node_modules
 frontend/node_modules
 frontend/dist
@@ -26,3 +32,14 @@ backups
 data
 models
 tmp
+logs
+compose.yml
+compose.override.yml
+docker-compose.yml
+docker-compose.override.yml
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.onnx

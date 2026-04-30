@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import HfApi, constants, hf_hub_download
+from huggingface_hub.file_download import repo_folder_name
 
 from .config_service import safe_join
 from .schemas import HfFile, HfResolveResponse
@@ -20,6 +21,14 @@ class HfReference:
     repo_id: str
     revision: str = "main"
     filename: str = ""
+
+
+@dataclass(frozen=True)
+class HfFileInfo:
+    path: str
+    size: int
+    cache_path: Path
+    incomplete_path: Path
 
 
 def parse_hf_url(url: str, default_revision: str = "main") -> HfReference:
@@ -82,6 +91,39 @@ def resolve_hf_url(url: str, revision: str = "main", token: str | None = None, a
     )
 
 
+def get_hf_file_info(
+    repo_id: str,
+    revision: str,
+    files: list[str],
+    token: str | None = None,
+    api: HfApi | None = None,
+) -> list[HfFileInfo]:
+    api = api or HfApi()
+    remote_info = api.get_paths_info(
+        repo_id,
+        files,
+        revision=revision,
+        expand=True,
+        token=token or os.getenv("HF_TOKEN") or None,
+    )
+    repo_cache = Path(constants.HF_HUB_CACHE) / repo_folder_name(repo_id=repo_id, repo_type="model") / "blobs"
+    result: list[HfFileInfo] = []
+    for item in remote_info:
+        blob_id = getattr(item, "blob_id", "") or ""
+        if not blob_id:
+            continue
+        cache_path = repo_cache / blob_id
+        result.append(
+            HfFileInfo(
+                path=getattr(item, "path", ""),
+                size=int(getattr(item, "size", 0) or 0),
+                cache_path=cache_path,
+                incomplete_path=cache_path.with_name(f"{cache_path.name}.incomplete"),
+            )
+        )
+    return result
+
+
 def download_selected_files(
     repo_id: str,
     revision: str,
@@ -104,4 +146,3 @@ def download_selected_files(
         shutil.copy2(cached, target)
         written.append(str(target))
     return written
-
