@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import difflib
+import errno
 import os
 import re
 import shlex
@@ -398,6 +399,13 @@ def _unique_backup_path(backup_root: Path, prefix: str) -> Path:
     return candidate
 
 
+def _overwrite_config_in_place(source: Path, target: Path) -> None:
+    with source.open("rb") as input_file, target.open("wb") as output_file:
+        shutil.copyfileobj(input_file, output_file)
+        output_file.flush()
+        os.fsync(output_file.fileno())
+
+
 def backup_and_apply_config(config_path: str, backups_dir: str, rendered_yaml: str) -> Path:
     requested_config = Path(config_path)
     config = requested_config.resolve() if requested_config.is_symlink() else requested_config
@@ -425,7 +433,12 @@ def backup_and_apply_config(config_path: str, backups_dir: str, rendered_yaml: s
             temp_file.flush()
             os.fsync(temp_file.fileno())
             temp_path = Path(temp_file.name)
-        os.replace(temp_path, config)
+        try:
+            os.replace(temp_path, config)
+        except OSError as exc:
+            if exc.errno != errno.EBUSY:
+                raise
+            _overwrite_config_in_place(temp_path, config)
     finally:
         if temp_path and temp_path.exists():
             temp_path.unlink()

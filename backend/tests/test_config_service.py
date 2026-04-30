@@ -1,3 +1,4 @@
+import errno
 import os
 import shlex
 from pathlib import Path
@@ -437,6 +438,26 @@ def test_backup_and_apply_uses_same_dir_temp_and_atomic_replace(tmp_path: Path, 
     assert backup.read_text(encoding="utf-8") == "models: {}\n"
     assert config.read_text(encoding="utf-8") == "models:\n  chat: {}\n"
     assert not calls[0][0].exists()
+
+
+def test_backup_and_apply_falls_back_for_bind_mounted_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = tmp_path / "config.yaml"
+    backups = tmp_path / "backups"
+    config.write_text("models: {}\n", encoding="utf-8")
+    replace_calls: list[tuple[Path, Path]] = []
+
+    def busy_replace(src: str | Path, dst: str | Path) -> None:
+        replace_calls.append((Path(src), Path(dst)))
+        raise OSError(errno.EBUSY, "Device or resource busy")
+
+    monkeypatch.setattr("app.config_service.os.replace", busy_replace)
+
+    backup = backup_and_apply_config(str(config), str(backups), "models:\n  chat: {}\n")
+
+    assert backup.read_text(encoding="utf-8") == "models: {}\n"
+    assert config.read_text(encoding="utf-8") == "models:\n  chat: {}\n"
+    assert replace_calls and replace_calls[0][1] == config
+    assert not replace_calls[0][0].exists()
 
 
 def test_backup_and_apply_rejects_missing_config_parent(tmp_path: Path) -> None:
