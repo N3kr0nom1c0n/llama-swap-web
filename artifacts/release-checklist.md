@@ -6,15 +6,15 @@ This file tracks the proof required before llama-swap-web is considered producti
 
 | Gate | Command / Evidence | Status | Notes |
 | --- | --- | --- | --- |
-| Backend tests | `./.venv/bin/pytest backend/tests -q` | Passed | 58 passed on 2026-04-30 after Phase 2 config/apply safety fixes. |
-| Frontend tests | `npm test` | Passed | 7 passed on 2026-04-30 after Help text update. |
+| Backend tests | `./.venv/bin/pytest backend/tests -q` | Passed | 81 passed on 2026-04-30 after Docker bind-mount config apply fix. |
+| Frontend tests | `npm test` | Passed | 9 passed on 2026-04-30. |
 | Frontend build | `npm run build` | Passed | Vite production build passed on 2026-04-30. |
 | Compose validation | `docker compose -f compose.example.yml config` | Passed | Compose example rendered on 2026-04-30. |
-| Docker build | `docker build -t llama-swap-web:qa .` | Blocked | Local Docker daemon socket unavailable: `unix:///Users/n3kr0/.docker/run/docker.sock`. Run on rig or CI. |
-| Container smoke | `/api/health`, `/api/state`, upload, preview, apply, replay reject | Pending | Must use temp mounts. |
-| Browser smoke | Import, Managed Models, GPU Planner, Config Preview, Settings, Help | Pending | Playwright once available, manual screenshots until then. |
-| Path safety | Upload/download/apply cannot escape `/models`, `/data`, `/backups`, `/tmp` | Partial | Upload and config path escape tests pass; download path safety and container smoke still pending. |
-| Secret safety | HF token never appears in API, UI, logs, or committed files | Partial | API token save/clear tests pass; final secret scan still required before release. |
+| Docker build | `docker build -t llama-swap-manager:phase3 .` | Passed | Local Docker Desktop build passed on 2026-04-30. |
+| Container smoke | `/api/health`, `/api/state`, upload, preview, apply, backup, token redaction | Passed | Temp-mounted container on `127.0.0.1:8092` passed on 2026-04-30. |
+| Browser smoke | Import, Managed Models, GPU Planner, Config Preview, Settings, Help | Pending | Frontend routes/assets were curl-smoked in Docker; Playwright/browser interaction tests are still pending. |
+| Path safety | Upload/download/apply cannot escape `/models`, `/data`, `/backups`, `/tmp` | Partial | Upload and config path escape tests pass; Docker config apply with bind mount passed; download path safety still needs full release gate coverage. |
+| Secret safety | HF token never appears in API, UI, logs, or committed files | Partial | API token save/clear and fake-token Docker redaction tests pass; final secret scan still required before release. |
 
 ## Issue Proof Matrix
 
