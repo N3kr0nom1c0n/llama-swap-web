@@ -3,9 +3,11 @@ from __future__ import annotations
 import difflib
 import os
 import re
+import shlex
 import shutil
+import tempfile
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ruamel.yaml import YAML
@@ -17,6 +19,8 @@ from .settings import ManagerSettings
 
 
 SAFE_MATRIX_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,7}$")
+RAW_COMMAND_PATH_FLAGS = {"-m", "--model", "--mmproj", "--chat-template-file"}
+RAW_COMMAND_NON_PATH_FLAGS = {"--port"}
 
 
 def safe_join(root: str | Path, *parts: str) -> Path:
@@ -66,13 +70,47 @@ def _has_flag(flags: dict[str, Any], canonical_name: str) -> bool:
     return any(_canonical_flag_key(name) == canonical_name for name in flags)
 
 
+def _quote_command_arg(value: Any) -> str:
+    text = str(value)
+    if text == "${PORT}":
+        return text
+    return shlex.quote(text)
+
+
+def _is_container_path(path: str, root: str) -> bool:
+    try:
+        path_obj = _normalize_posix_path(path)
+        root_obj = _normalize_posix_path(root)
+    except TypeError:
+        return False
+    if not path_obj.is_absolute() or not root_obj.is_absolute():
+        return False
+    return path_obj == root_obj or root_obj in path_obj.parents
+
+
+def _normalize_posix_path(path: str) -> PurePosixPath:
+    path_obj = PurePosixPath(path)
+    parts: list[str] = []
+    for part in path_obj.parts:
+        if part in {"", "."} or part == "/":
+            continue
+        if part == "..":
+            if parts:
+                parts.pop()
+            else:
+                parts.append(part)
+            continue
+        parts.append(part)
+    return PurePosixPath("/", *parts) if path_obj.is_absolute() else PurePosixPath(*parts)
+
+
 def _format_flag(name: str, value: Any) -> str | None:
     flag = _flag_name(name)
     if value is None or value is False or value == "":
         return None
     if value is True:
         return flag
-    return f"{flag} {value}"
+    return f"{flag} {_quote_command_arg(value)}"
 
 
 def build_llama_command(model: ManagedModel, settings: ManagerSettings) -> str:
@@ -82,14 +120,14 @@ def build_llama_command(model: ManagedModel, settings: ManagerSettings) -> str:
     if not model_file:
         raise ValueError(f"{model.id} has no primary model file")
     segments: list[str] = [
-        settings.llama_server_cmd,
+        _quote_command_arg(settings.llama_server_cmd),
         "--port ${PORT}",
-        f"-m {model_file}",
+        f"-m {_quote_command_arg(model_file)}",
     ]
     if model.mmproj_file:
-        segments.append(f"--mmproj {model.mmproj_file}")
+        segments.append(f"--mmproj {_quote_command_arg(model.mmproj_file)}")
     if model.chat_template_file:
-        segments.append(f"--chat-template-file {model.chat_template_file}")
+        segments.append(f"--chat-template-file {_quote_command_arg(model.chat_template_file)}")
     flags = dict(model.llama_flags)
     if not _has_flag(flags, "ctx-size"):
         flags["ctx-size"] = settings.defaults.ctx_size
@@ -181,13 +219,52 @@ def build_matrix(models: list[ManagedModel], existing: CommentedMap | None = Non
     return matrix if matrix["vars"] or matrix["sets"] else None
 
 
-def build_hooks(models: list[ManagedModel]) -> CommentedMap | None:
+def build_hooks(models: list[ManagedModel], existing: CommentedMap | None = None) -> CommentedMap | None:
+    hooks = CommentedMap(existing or {})
+    existing_on_startup = hooks.get("on_startup")
+    if isinstance(existing_on_startup, CommentedMap):
+        on_startup = CommentedMap(existing_on_startup)
+    elif isinstance(existing_on_startup, dict):
+        on_startup = CommentedMap(existing_on_startup)
+    else:
+        on_startup = CommentedMap()
+    current_model_ids = {model.id for model in models}
+    existing_preload = list(on_startup.get("preload") or [])
+    preserved_preload = [model_id for model_id in existing_preload if model_id not in current_model_ids]
     preload = [model.id for model in models if model.startup_preload]
-    if not preload:
-        return None
-    hooks = CommentedMap()
-    hooks["on_startup"] = CommentedMap({"preload": preload})
-    return hooks
+    if preload:
+        on_startup["preload"] = [*preserved_preload, *[model_id for model_id in preload if model_id not in preserved_preload]]
+        hooks["on_startup"] = on_startup
+    elif preserved_preload:
+        on_startup["preload"] = preserved_preload
+        hooks["on_startup"] = on_startup
+    elif "preload" in on_startup:
+        del on_startup["preload"]
+        hooks["on_startup"] = on_startup
+    return hooks if hooks else None
+
+
+def _raw_command_path_errors(model: ManagedModel, settings: ManagerSettings, cmd: str) -> list[str]:
+    if not model.raw_cmd_override.strip():
+        return []
+    try:
+        args = shlex.split(cmd.replace("\\\n", " "))
+    except ValueError as exc:
+        return [f"{model.id} raw command cannot be parsed: {exc}"]
+    errors: list[str] = []
+    for index, arg in enumerate(args):
+        if index == 0:
+            continue
+        flag, separator, value = arg.partition("=")
+        if separator and value.startswith("/") and not _is_container_path(value, settings.llama_swap_model_root):
+            errors.append(f"{model.id} raw command path must use {settings.llama_swap_model_root}: {value}")
+    for index, arg in enumerate(args[:-1]):
+        next_arg = args[index + 1]
+        if arg.startswith("-") and arg not in RAW_COMMAND_NON_PATH_FLAGS and next_arg.startswith("/") and not _is_container_path(
+            next_arg, settings.llama_swap_model_root
+        ):
+            errors.append(f"{model.id} raw command path must use {settings.llama_swap_model_root}: {next_arg}")
+    return errors
 
 
 def validate_config_document(document: dict, models: list[ManagedModel], settings: ManagerSettings) -> list[str]:
@@ -211,8 +288,9 @@ def validate_config_document(document: dict, models: list[ManagedModel], setting
             errors.append(f"{model.id} command must include ${{PORT}}")
         if settings.manager_model_root != settings.llama_swap_model_root and settings.manager_model_root in cmd:
             errors.append(f"{model.id} command contains manager/host model root")
+        errors.extend(_raw_command_path_errors(model, settings, cmd))
         for path in [model.primary_model_file, model.mmproj_file, model.chat_template_file, *model.container_files]:
-            if path and not path.startswith(settings.llama_swap_model_root):
+            if path and not _is_container_path(path, settings.llama_swap_model_root):
                 errors.append(f"{model.id} file path must use {settings.llama_swap_model_root}: {path}")
         for alias in model.aliases:
             if alias in seen_aliases or alias in model_ids:
@@ -232,10 +310,10 @@ def validate_config_document(document: dict, models: list[ManagedModel], setting
         ("download temp directory", settings.download_temp_dir),
     ]:
         path_obj = Path(path)
-        try:
-            path_obj.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            errors.append(f"{label} is not writable: {exc}")
+        if not path_obj.exists():
+            continue
+        if not path_obj.is_dir():
+            errors.append(f"{label} is not a directory: {path}")
             continue
         if not os.access(path_obj, os.W_OK):
             errors.append(f"{label} is not writable: {path}")
@@ -275,9 +353,11 @@ def render_config(current_yaml: str, models: list[ManagedModel], settings: Manag
     matrix = build_matrix(models, document.get("matrix"))
     if matrix:
         document["matrix"] = matrix
-    hooks = build_hooks(models)
+    hooks = build_hooks(models, document.get("hooks"))
     if hooks:
         document["hooks"] = hooks
+    elif "hooks" in document:
+        del document["hooks"]
     from io import StringIO
 
     output = StringIO()
@@ -308,17 +388,45 @@ def preview_config(current_yaml: str, models: list[ManagedModel], settings: Mana
     return ConfigPreviewResponse(valid=not errors, yaml=rendered, diff=diff, errors=errors, warnings=warnings)
 
 
+def _unique_backup_path(backup_root: Path, prefix: str) -> Path:
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    candidate = backup_root / f"{prefix}-{stamp}.yaml"
+    counter = 1
+    while candidate.exists():
+        candidate = backup_root / f"{prefix}-{stamp}-{counter}.yaml"
+        counter += 1
+    return candidate
+
+
 def backup_and_apply_config(config_path: str, backups_dir: str, rendered_yaml: str) -> Path:
-    config = Path(config_path)
+    requested_config = Path(config_path)
+    config = requested_config.resolve() if requested_config.is_symlink() else requested_config
     backup_root = Path(backups_dir)
+    if not config.parent.exists():
+        raise ValueError(f"config parent directory does not exist: {config.parent}")
     backup_root.mkdir(parents=True, exist_ok=True)
     if config.exists():
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        backup = backup_root / f"config-{stamp}.yaml"
+        backup = _unique_backup_path(backup_root, "config")
         shutil.copy2(config, backup)
     else:
-        backup = backup_root / "config-initial.yaml"
+        backup = _unique_backup_path(backup_root, "config-initial")
         backup.write_text("", encoding="utf-8")
-    config.parent.mkdir(parents=True, exist_ok=True)
-    config.write_text(rendered_yaml, encoding="utf-8")
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=config.parent,
+            prefix=f".{config.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temp_file:
+            temp_file.write(rendered_yaml)
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+            temp_path = Path(temp_file.name)
+        os.replace(temp_path, config)
+    finally:
+        if temp_path and temp_path.exists():
+            temp_path.unlink()
     return backup

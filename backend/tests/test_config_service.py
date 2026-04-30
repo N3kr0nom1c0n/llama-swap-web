@@ -1,11 +1,12 @@
-from __future__ import annotations
-
+import os
+import shlex
 from pathlib import Path
 
 import pytest
 
 from app.config_service import (
     backup_and_apply_config,
+    build_llama_command,
     manager_to_llama_path,
     preview_config,
     safe_join,
@@ -75,6 +76,18 @@ def test_preview_generates_matrix_and_no_groups(tmp_path: Path) -> None:
     assert "c_set: c & +support" in result.yaml
     assert 'CUDA_VISIBLE_DEVICES=0' in result.yaml
     assert "${PORT}" in result.yaml
+
+
+def test_preview_does_not_create_missing_validation_directories(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    model = ManagedModel(id="chat", display_name="Chat", primary_model_file="/models/chat/chat.gguf")
+
+    result = preview_config("models: {}\n", [model], settings)
+
+    assert result.valid
+    assert not (tmp_path / "models").exists()
+    assert not (tmp_path / "backups").exists()
+    assert not (tmp_path / "tmp").exists()
 
 
 def test_preview_rejects_legacy_groups() -> None:
@@ -147,6 +160,69 @@ matrix:
     assert result.yaml.count("c_set: c") == 1
 
 
+def test_preview_preserves_custom_hooks_when_updating_preload(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    model = ManagedModel(
+        id="chat",
+        display_name="Chat",
+        primary_model_file="/models/chat/chat.gguf",
+        startup_preload=True,
+    )
+    current = """
+models:
+  external-support:
+    cmd: /app/llama-server --port ${PORT} -m /models/aux/support.gguf
+hooks:
+  on_startup:
+    shell: echo custom
+    preload:
+      - chat
+      - external-support
+  on_model_load:
+    shell: echo load
+"""
+
+    first = preview_config(current, [model], settings)
+    second = preview_config(first.yaml, [model], settings)
+
+    assert first.valid
+    assert "shell: echo custom" in first.yaml
+    assert "on_model_load:" in first.yaml
+    assert "shell: echo load" in first.yaml
+    assert first.yaml.count("preload:") == 1
+    assert first.yaml.count("- chat") == 1
+    assert "- external-support" in first.yaml
+    assert second.yaml == first.yaml
+
+
+def test_scoped_preview_preserves_existing_preload_when_scope_has_no_preload(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    model = ManagedModel(
+        id="chat",
+        display_name="Chat",
+        primary_model_file="/models/chat/chat.gguf",
+        startup_preload=False,
+    )
+    current = """
+models:
+  existing-support:
+    cmd: /app/llama-server --port ${PORT} -m /models/aux/support.gguf
+hooks:
+  on_startup:
+    preload:
+      - chat
+      - existing-support
+    shell: echo custom
+"""
+
+    result = preview_config(current, [model], settings)
+
+    assert result.valid
+    assert "- existing-support" in result.yaml
+    assert "- chat" not in result.yaml
+    assert "shell: echo custom" in result.yaml
+
+
 def test_preview_rejects_host_paths_in_command() -> None:
     settings = ManagerSettings(manager_model_root="/host/models", llama_swap_model_root="/models")
     model = ManagedModel(
@@ -159,6 +235,109 @@ def test_preview_rejects_host_paths_in_command() -> None:
 
     assert not result.valid
     assert any("file path must use /models" in error for error in result.errors)
+
+
+def test_preview_rejects_sibling_container_root_prefix() -> None:
+    settings = ManagerSettings(manager_model_root="/models", llama_swap_model_root="/models")
+    model = ManagedModel(
+        id="chat",
+        display_name="Chat",
+        primary_model_file="/models_evil/chat.gguf",
+    )
+
+    result = preview_config("models: {}\n", [model], settings)
+
+    assert not result.valid
+    assert any("file path must use /models" in error for error in result.errors)
+
+
+def test_preview_rejects_container_path_with_parent_escape() -> None:
+    settings = ManagerSettings(manager_model_root="/models", llama_swap_model_root="/models")
+    model = ManagedModel(
+        id="chat",
+        display_name="Chat",
+        primary_model_file="/models/../host/chat.gguf",
+    )
+
+    result = preview_config("models: {}\n", [model], settings)
+
+    assert not result.valid
+    assert any("file path must use /models" in error for error in result.errors)
+
+
+def test_preview_rejects_raw_override_host_model_path(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    model = ManagedModel(
+        id="chat",
+        display_name="Chat",
+        primary_model_file="/models/chat/chat.gguf",
+        raw_cmd_override="/app/llama-server --port ${PORT} -m /Users/n3kr0/models/chat.gguf",
+    )
+
+    result = preview_config("models: {}\n", [model], settings)
+
+    assert not result.valid
+    assert any("raw command path must use /models" in error for error in result.errors)
+
+
+def test_preview_rejects_raw_override_equals_style_host_model_path(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    model = ManagedModel(
+        id="chat",
+        display_name="Chat",
+        primary_model_file="/models/chat/chat.gguf",
+        raw_cmd_override="/app/llama-server --port ${PORT} --model=/Users/n3kr0/models/chat.gguf",
+    )
+
+    result = preview_config("models: {}\n", [model], settings)
+
+    assert not result.valid
+    assert any("raw command path must use /models" in error for error in result.errors)
+
+
+def test_preview_rejects_raw_override_parent_escape_model_path(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    model = ManagedModel(
+        id="chat",
+        display_name="Chat",
+        primary_model_file="/models/chat/chat.gguf",
+        raw_cmd_override="/app/llama-server --port ${PORT} --model=/models/../host/chat.gguf",
+    )
+
+    result = preview_config("models: {}\n", [model], settings)
+
+    assert not result.valid
+    assert any("raw command path must use /models" in error for error in result.errors)
+
+
+def test_preview_rejects_raw_override_unknown_absolute_flag_path(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    model = ManagedModel(
+        id="chat",
+        display_name="Chat",
+        primary_model_file="/models/chat/chat.gguf",
+        raw_cmd_override="/app/llama-server --port ${PORT} --flag=/host/model.gguf",
+    )
+
+    result = preview_config("models: {}\n", [model], settings)
+
+    assert not result.valid
+    assert any("raw command path must use /models" in error for error in result.errors)
+
+
+def test_preview_rejects_raw_override_unknown_flag_parent_escape(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    model = ManagedModel(
+        id="chat",
+        display_name="Chat",
+        primary_model_file="/models/chat/chat.gguf",
+        raw_cmd_override="/app/llama-server --port ${PORT} --flag=/models/../host/model.gguf",
+    )
+
+    result = preview_config("models: {}\n", [model], settings)
+
+    assert not result.valid
+    assert any("raw command path must use /models" in error for error in result.errors)
 
 
 def test_command_builder_accepts_ui_underscore_flag_names(tmp_path: Path) -> None:
@@ -179,6 +358,35 @@ def test_command_builder_accepts_ui_underscore_flag_names(tmp_path: Path) -> Non
     assert "--flash-attn on" in result.yaml
 
 
+def test_command_builder_quotes_shell_sensitive_args_and_preserves_port(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path, llama_server_cmd="/opt/llama bin/llama-server")
+    model = ManagedModel(
+        id="chat",
+        display_name="Chat",
+        primary_model_file="/models/chat/model with spaces.gguf",
+        mmproj_file="/models/vision/mmproj's file.gguf",
+        chat_template_file="/models/chat/template (copy).jinja",
+        llama_flags={"tensor_split": "3, 2", "rope-scaling": "linear&safe"},
+    )
+
+    cmd = build_llama_command(model, settings)
+    args = shlex.split(cmd.replace("\\\n", " "))
+
+    assert args[:5] == [
+        "/opt/llama bin/llama-server",
+        "--port",
+        "${PORT}",
+        "-m",
+        "/models/chat/model with spaces.gguf",
+    ]
+    assert "${PORT}" in cmd
+    assert "'${PORT}'" not in cmd
+    assert args[args.index("--mmproj") + 1] == "/models/vision/mmproj's file.gguf"
+    assert args[args.index("--chat-template-file") + 1] == "/models/chat/template (copy).jinja"
+    assert args[args.index("--tensor-split") + 1] == "3, 2"
+    assert args[args.index("--rope-scaling") + 1] == "linear&safe"
+
+
 def test_backup_and_apply_writes_backup_first(tmp_path: Path) -> None:
     config = tmp_path / "config.yaml"
     backups = tmp_path / "backups"
@@ -189,3 +397,66 @@ def test_backup_and_apply_writes_backup_first(tmp_path: Path) -> None:
     assert backup.exists()
     assert backup.read_text(encoding="utf-8") == "models: {}\n"
     assert "chat" in config.read_text(encoding="utf-8")
+
+
+def test_backup_and_apply_creates_distinct_backups_in_same_second(tmp_path: Path) -> None:
+    config = tmp_path / "config.yaml"
+    backups = tmp_path / "backups"
+    config.write_text("models: {}\n", encoding="utf-8")
+
+    first = backup_and_apply_config(str(config), str(backups), "models:\n  first: {}\n")
+    second = backup_and_apply_config(str(config), str(backups), "models:\n  second: {}\n")
+
+    assert first != second
+    assert first.read_text(encoding="utf-8") == "models: {}\n"
+    assert second.read_text(encoding="utf-8") == "models:\n  first: {}\n"
+    assert config.read_text(encoding="utf-8") == "models:\n  second: {}\n"
+
+
+def test_backup_and_apply_uses_same_dir_temp_and_atomic_replace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = tmp_path / "config.yaml"
+    backups = tmp_path / "backups"
+    config.write_text("models: {}\n", encoding="utf-8")
+    calls: list[tuple[Path, Path]] = []
+
+    def record_replace(src: str | Path, dst: str | Path) -> None:
+        source = Path(src)
+        target = Path(dst)
+        calls.append((source, target))
+        assert source.parent == config.parent
+        assert source.name.startswith(f".{config.name}.")
+        assert source.read_text(encoding="utf-8") == "models:\n  chat: {}\n"
+        original_replace(source, target)
+
+    original_replace = os.replace
+    monkeypatch.setattr("app.config_service.os.replace", record_replace)
+
+    backup = backup_and_apply_config(str(config), str(backups), "models:\n  chat: {}\n")
+
+    assert calls == [(calls[0][0], config)]
+    assert backup.read_text(encoding="utf-8") == "models: {}\n"
+    assert config.read_text(encoding="utf-8") == "models:\n  chat: {}\n"
+    assert not calls[0][0].exists()
+
+
+def test_backup_and_apply_rejects_missing_config_parent(tmp_path: Path) -> None:
+    config = tmp_path / "missing" / "config.yaml"
+    backups = tmp_path / "backups"
+
+    with pytest.raises(ValueError, match="config parent directory does not exist"):
+        backup_and_apply_config(str(config), str(backups), "models: {}\n")
+
+
+def test_backup_and_apply_preserves_config_symlink(tmp_path: Path) -> None:
+    real_config = tmp_path / "actual" / "config.yaml"
+    real_config.parent.mkdir()
+    real_config.write_text("models: {}\n", encoding="utf-8")
+    link_config = tmp_path / "config.yaml"
+    link_config.symlink_to(real_config)
+    backups = tmp_path / "backups"
+
+    backup = backup_and_apply_config(str(link_config), str(backups), "models:\n  chat: {}\n")
+
+    assert link_config.is_symlink()
+    assert backup.read_text(encoding="utf-8") == "models: {}\n"
+    assert real_config.read_text(encoding="utf-8") == "models:\n  chat: {}\n"

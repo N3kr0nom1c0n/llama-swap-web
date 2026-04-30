@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import os
 import uuid
+from datetime import UTC, datetime
+from hashlib import sha256
+from json import dumps, loads
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from ruamel.yaml import YAML
 
 from .config_service import backup_and_apply_config, manager_to_llama_path, preview_config, safe_join
 from .database import Database
@@ -27,6 +31,7 @@ from .schemas import (
 from .settings import ManagerSettings, clear_hf_token, default_db_path, get_hf_token, save_hf_token
 
 UPLOAD_CHUNK_SIZE = 1024 * 1024
+STAGED_CONFIG_TTL_SECONDS = 15 * 60
 
 
 def create_app(db_path: str | Path | None = None) -> FastAPI:
@@ -168,13 +173,22 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
 
     @app.post("/api/config/preview")
     def config_preview(payload: ConfigPreviewRequest | None = None) -> dict:
+        payload = payload or ConfigPreviewRequest()
         settings = db.get_settings()
-        models = db.list_models()
-        current = Path(settings.llama_swap_config_path).read_text(encoding="utf-8") if Path(settings.llama_swap_config_path).exists() else ""
+        all_models = db.list_models()
+        models = _select_models_for_preview(all_models, payload.model_ids)
+        current = _read_current_config(settings.llama_swap_config_path)
         preview = preview_config(current, models, settings)
         if preview.valid:
             preview.stage_id = str(uuid.uuid4())
-            db.save_staged_config(preview.stage_id, preview.yaml, preview.diff)
+            db.save_staged_config(
+                preview.stage_id,
+                preview.yaml,
+                preview.diff,
+                fingerprint=_stage_fingerprint(current, models, settings),
+                model_ids=[model.id for model in models],
+                ttl_seconds=STAGED_CONFIG_TTL_SECONDS,
+            )
         return preview.model_dump()
 
     @app.post("/api/config/apply")
@@ -183,7 +197,13 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         if not staged:
             raise HTTPException(status_code=404, detail="staged config not found; regenerate preview before applying")
         settings = db.get_settings()
-        backup = backup_and_apply_config(settings.llama_swap_config_path, settings.backups_dir, staged["yaml"])
+        _validate_staged_config_for_apply(db, staged, settings)
+        if not db.claim_staged_config(payload.stage_id):
+            raise HTTPException(status_code=409, detail="staged config was already applied; regenerate preview")
+        try:
+            backup = backup_and_apply_config(settings.llama_swap_config_path, settings.backups_dir, staged["yaml"])
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=f"could not apply staged config: {exc}") from exc
         return {
             "applied": True,
             "backup": str(backup),
@@ -318,3 +338,98 @@ def _path_status(path: Path) -> dict:
         "readable": os.access(path, os.R_OK) if path.exists() else False,
         "writable": os.access(target, os.W_OK),
     }
+
+
+def _select_models_for_preview(models: list[ManagedModel], model_ids: list[str]) -> list[ManagedModel]:
+    if not model_ids:
+        return models
+    by_id = {model.id: model for model in models}
+    missing = sorted(set(model_ids) - set(by_id))
+    if missing:
+        raise HTTPException(status_code=400, detail=f"unknown model id(s): {', '.join(missing)}")
+    requested = set(model_ids)
+    return [model for model in models if model.id in requested]
+
+
+def _read_current_config(config_path: str) -> str:
+    path = Path(config_path)
+    if not path.exists():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"could not read current config: {exc}") from exc
+
+
+def _validate_staged_config_for_apply(db: Database, staged: dict, settings: ManagerSettings) -> None:
+    if staged.get("applied_at"):
+        raise HTTPException(status_code=409, detail="staged config was already applied; regenerate preview")
+    try:
+        current = _read_current_config(settings.llama_swap_config_path)
+    except HTTPException as exc:
+        if exc.status_code == 400:
+            raise HTTPException(status_code=409, detail=f"could not validate current config: {exc.detail}") from exc
+        raise
+    staged_yaml = str(staged.get("yaml") or "")
+    if _model_keys(current) and not _model_keys(staged_yaml):
+        raise HTTPException(status_code=409, detail="destructive empty models config blocked; regenerate preview")
+    if not staged.get("expires_at") or not staged.get("fingerprint"):
+        raise HTTPException(status_code=409, detail="staged config is missing freshness metadata; regenerate preview")
+    expires_at = _parse_timestamp(staged.get("expires_at"))
+    if expires_at and expires_at <= datetime.now(UTC):
+        raise HTTPException(status_code=409, detail="staged config expired; regenerate preview")
+    fingerprint = str(staged.get("fingerprint") or "")
+    if fingerprint:
+        models = _models_for_stage(db, staged)
+        current_fingerprint = _stage_fingerprint(current, models, settings)
+        if current_fingerprint != fingerprint:
+            raise HTTPException(status_code=409, detail="staged config is stale; regenerate preview")
+
+
+def _models_for_stage(db: Database, staged: dict) -> list[ManagedModel]:
+    try:
+        raw_model_ids = loads(staged.get("model_ids") or "[]")
+        if not isinstance(raw_model_ids, list):
+            raise ValueError("model_ids must be a list")
+        model_ids = [str(model_id) for model_id in raw_model_ids]
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail="staged config metadata is invalid; regenerate preview") from exc
+    models = db.list_models()
+    if not model_ids:
+        return []
+    by_id = {model.id: model for model in models}
+    missing = sorted(set(model_ids) - set(by_id))
+    if missing:
+        raise HTTPException(status_code=409, detail=f"staged config references missing model(s): {', '.join(missing)}")
+    requested = set(model_ids)
+    return [model for model in models if model.id in requested]
+
+
+def _stage_fingerprint(current_yaml: str, models: list[ManagedModel], settings: ManagerSettings) -> str:
+    payload = {
+        "current_yaml_sha256": sha256(current_yaml.encode("utf-8")).hexdigest(),
+        "models": [model.model_dump(mode="json") for model in sorted(models, key=lambda item: item.id)],
+        "settings": settings.model_dump(mode="json"),
+    }
+    return sha256(dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _model_keys(yaml_text: str) -> set[str]:
+    if not yaml_text.strip():
+        return set()
+    try:
+        document = YAML().load(yaml_text) or {}
+    except Exception:
+        return set()
+    models = document.get("models") if isinstance(document, dict) else {}
+    return {str(key) for key in models.keys()} if isinstance(models, dict) else set()
+
+
+def _parse_timestamp(value: object) -> datetime | None:
+    if not value:
+        return None
+    try:
+        timestamp = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail="staged config metadata is invalid; regenerate preview") from exc
+    return timestamp if timestamp.tzinfo else timestamp.replace(tzinfo=UTC)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Iterator
 
@@ -65,10 +65,15 @@ class Database:
                   id text primary key,
                   yaml text not null,
                   diff text not null,
-                  created_at text not null
+                  created_at text not null,
+                  expires_at text,
+                  fingerprint text not null default '',
+                  model_ids text not null default '[]',
+                  applied_at text
                 );
                 """
             )
+            self._migrate_staged_configs(conn)
             if not conn.execute("select 1 from settings where key = 'settings'").fetchone():
                 settings = settings_from_env()
                 conn.execute(
@@ -84,6 +89,18 @@ class Database:
                         "insert into gpus(idx, payload) values(?, ?)",
                         (gpu.index, gpu.model_dump_json()),
                     )
+
+    def _migrate_staged_configs(self, conn: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in conn.execute("pragma table_info(staged_configs)").fetchall()}
+        migrations = {
+            "expires_at": "alter table staged_configs add column expires_at text",
+            "fingerprint": "alter table staged_configs add column fingerprint text not null default ''",
+            "model_ids": "alter table staged_configs add column model_ids text not null default '[]'",
+            "applied_at": "alter table staged_configs add column applied_at text",
+        }
+        for column, statement in migrations.items():
+            if column not in columns:
+                conn.execute(statement)
 
     def get_settings(self) -> ManagerSettings:
         with self.connect() as conn:
@@ -165,17 +182,45 @@ class Database:
             )
         return job
 
-    def save_staged_config(self, stage_id: str, yaml_text: str, diff: str) -> None:
+    def save_staged_config(
+        self,
+        stage_id: str,
+        yaml_text: str,
+        diff: str,
+        fingerprint: str = "",
+        model_ids: list[str] | None = None,
+        ttl_seconds: int = 900,
+    ) -> None:
+        created_at = utc_now()
+        expires_at = (datetime.fromisoformat(created_at) + timedelta(seconds=ttl_seconds)).isoformat()
         with self.connect() as conn:
             conn.execute(
-                "insert or replace into staged_configs(id, yaml, diff, created_at) values(?, ?, ?, ?)",
-                (stage_id, yaml_text, diff, utc_now()),
+                """
+                insert or replace into staged_configs(id, yaml, diff, created_at, expires_at, fingerprint, model_ids, applied_at)
+                values(?, ?, ?, ?, ?, ?, ?, null)
+                """,
+                (stage_id, yaml_text, diff, created_at, expires_at, fingerprint, json.dumps(model_ids or [])),
             )
 
     def get_staged_config(self, stage_id: str) -> dict | None:
         with self.connect() as conn:
-            row = conn.execute("select id, yaml, diff, created_at from staged_configs where id = ?", (stage_id,)).fetchone()
+            row = conn.execute(
+                "select id, yaml, diff, created_at, expires_at, fingerprint, model_ids, applied_at from staged_configs where id = ?",
+                (stage_id,),
+            ).fetchone()
             return dict(row) if row else None
+
+    def mark_staged_config_applied(self, stage_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute("update staged_configs set applied_at = ? where id = ?", (utc_now(), stage_id))
+
+    def claim_staged_config(self, stage_id: str) -> bool:
+        with self.connect() as conn:
+            cursor = conn.execute(
+                "update staged_configs set applied_at = ? where id = ? and applied_at is null",
+                (utc_now(), stage_id),
+            )
+            return cursor.rowcount == 1
 
 
 def redact_secrets(payload: dict) -> dict:
