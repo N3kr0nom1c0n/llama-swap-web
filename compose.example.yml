@@ -1,0 +1,18 @@
+services:
+  llama-swap-manager:
+    image: ghcr.io/n3kr0/llama-swap-manager:latest
+    container_name: llama-swap-manager
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8081:8081"
+    volumes:
+      - /home/n3kr0/Repos/llama.cpp/models:/models
+      - /home/n3kr0/Repos/llama-swap/config.yaml:/app/config.yaml
+      - /mnt/data_hoard/llama-swap/backups:/backups
+      - /tmp:/tmp
+      - llama-swap-manager-data:/data
+
+volumes:
+  llama-swap-manager-data:

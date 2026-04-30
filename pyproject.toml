@@ -1,0 +1,23 @@
+[project]
+name = "llama-swap-manager"
+version = "0.1.0"
+description = "LAN web app for staged llama-swap model imports and matrix config generation"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115.0",
+  "huggingface-hub>=0.36.0",
+  "python-multipart>=0.0.20",
+  "ruamel.yaml>=0.18.6",
+  "uvicorn[standard]>=0.32.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.27.0",
+  "pytest>=8.3.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+pythonpath = ["backend"]
+
