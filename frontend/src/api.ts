@@ -7,6 +7,7 @@ import type {
   ConfigRestoreResponse,
   GpuDetectionResponse,
   DownloadJob,
+  FileInventoryItem,
   GpuDevice,
   GpuRecommendationResponse,
   HfResolveResponse,
@@ -71,7 +72,9 @@ export const api = {
   download: (id: string) => request<DownloadJob>(`/api/downloads/${encodeURIComponent(id)}`),
   cancelDownload: (id: string) => request<DownloadJob>(`/api/downloads/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
   retryDownload: (id: string) => request<DownloadJob>(`/api/downloads/${encodeURIComponent(id)}/retry`, { method: "POST" }),
+  cleanupTerminalDownloads: () => request<{ removed: number }>("/api/downloads/terminal", { method: "DELETE" }),
   models: () => request<ManagedModel[]>("/api/models"),
+  scanModels: () => request<FileInventoryItem[]>("/api/models/scan"),
   saveModel: (model: ManagedModel) =>
     request<ManagedModel>("/api/models", { method: "POST", body: JSON.stringify(normalizeModel(model)) }),
   createModelFromDownload: (jobId: string, payload: CreateModelFromDownloadPayload) =>

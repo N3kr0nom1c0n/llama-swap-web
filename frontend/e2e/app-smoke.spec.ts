@@ -34,7 +34,7 @@ test("dashboard loads against a healthy running app", async ({ page, request }) 
 test("import model page exposes source controls", async ({ page }) => {
   await page.goto("/import");
 
-  await expect(page.getByRole("heading", { name: /import/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^import model$/i })).toBeVisible();
   await expect(page.getByLabel(/role/i)).toBeVisible();
   await expect(page.getByLabel(/desired name/i)).toBeVisible();
   await expect(page.getByLabel(/hugging face url/i)).toBeVisible();

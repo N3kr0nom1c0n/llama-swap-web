@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { cleanup, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DashboardPage } from "./DashboardPage";
 import { renderWithProviders } from "../test/testUtils";
@@ -49,6 +49,7 @@ const statePayload = {
 
 describe("DashboardPage", () => {
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
   });
 
@@ -56,6 +57,7 @@ describe("DashboardPage", () => {
     vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const url = String(input);
       if (url.endsWith("/api/state")) return Promise.resolve(jsonResponse(statePayload));
+      if (url.endsWith("/api/downloads")) return Promise.resolve(jsonResponse([]));
       if (url.endsWith("/api/models")) {
         return Promise.resolve(
           jsonResponse([
@@ -78,6 +80,85 @@ describe("DashboardPage", () => {
     expect(screen.getByText("HF token")).toBeInTheDocument();
     expect(screen.getByText("configured")).toBeInTheDocument();
     expect(screen.queryByText("secret")).not.toBeInTheDocument();
+  });
+
+  it("shows next actions instead of a raw download job dashboard", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/api/state")) {
+        return Promise.resolve(jsonResponse({ ...statePayload, model_count: 0, job_count: 3 }));
+      }
+      if (url.endsWith("/api/models")) return Promise.resolve(jsonResponse([]));
+      if (url.endsWith("/api/downloads")) {
+        return Promise.resolve(
+          jsonResponse([
+            {
+              id: "running-job",
+              status: "running",
+              repo_id: "org/running",
+              revision: "main",
+              files: ["running.gguf"],
+              destination_dir: "/models/chat/running",
+              container_dir: "/models/chat/running",
+              written_files: [],
+              container_files: [],
+              progress: 42,
+              bytes_downloaded: 40,
+              bytes_total: 100,
+              active_file: "running.gguf",
+              logs: [],
+              error: "",
+            },
+            {
+              id: "done-job",
+              status: "completed",
+              repo_id: "org/new-model",
+              revision: "main",
+              files: ["new-model.gguf"],
+              destination_dir: "/models/chat/new-model",
+              container_dir: "/models/chat/new-model",
+              written_files: ["/models/chat/new-model/new-model.gguf"],
+              container_files: ["/models/chat/new-model/new-model.gguf"],
+              progress: 100,
+              bytes_downloaded: 100,
+              bytes_total: 100,
+              active_file: "",
+              logs: [],
+              error: "",
+            },
+            {
+              id: "failed-job",
+              status: "failed",
+              repo_id: "org/failed",
+              revision: "main",
+              files: ["failed.gguf"],
+              destination_dir: "/models/chat/failed",
+              container_dir: "/models/chat/failed",
+              written_files: [],
+              container_files: [],
+              progress: 0,
+              bytes_downloaded: 0,
+              bytes_total: 0,
+              active_file: "",
+              logs: [],
+              error: "network failed",
+            },
+          ]),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected fetch ${url}`));
+    });
+
+    renderWithProviders(<DashboardPage />);
+
+    await screen.findByRole("heading", { name: "Next Actions" });
+    expect(screen.queryByText("Download jobs")).not.toBeInTheDocument();
+    expect(screen.getByText("Action needed")).toBeInTheDocument();
+    expect(await screen.findByText("2")).toBeInTheDocument();
+    expect(screen.getByText("Downloaded but not configured")).toBeInTheDocument();
+    expect(screen.getByText("Active download")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Finish setup" })).toHaveAttribute("href", "/import?job=done-job");
+    expect(screen.getByRole("link", { name: "Fix failed download" })).toHaveAttribute("href", "/import");
   });
 });
 

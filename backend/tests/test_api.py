@@ -481,8 +481,8 @@ def test_import_returns_manager_destination_and_container_destination(tmp_path: 
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["destination_dir"] == str(tmp_path / "host-models" / "chat")
-    assert payload["container_dir"] == "/models/chat"
+    assert payload["destination_dir"] == str(tmp_path / "host-models" / "chat" / "tiny")
+    assert payload["container_dir"] == "/models/chat/tiny"
 
 
 def test_config_apply_requires_reviewed_stage_id(tmp_path: Path, monkeypatch) -> None:

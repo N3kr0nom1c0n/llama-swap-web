@@ -90,20 +90,25 @@ export const helpSections: HelpSection[] = [
       {
         id: "dashboard",
         title: "Dashboard",
-        summary: "A quick health view for config writability, GPU inventory, jobs, and managed models.",
+        summary: "The action board for config writability, active downloads, failed jobs, and model setup blockers.",
         body: [
-          "Use Dashboard first after a deploy. It shows whether /app/config.yaml exists and is writable, how many GPUs are configured, how many download jobs exist, and which models are already known to the manager.",
+          "Use Dashboard first after a deploy. It shows whether /app/config.yaml exists and is writable, how many managed models exist, and what action is blocking a model from becoming usable.",
+          "Next Actions replaces raw download history. It surfaces active downloads, failed or cancelled downloads, completed downloads that are not connected to a managed model, and config path problems.",
+          "Use Finish setup on a downloaded-but-not-configured item to jump straight to Import Model with that job highlighted.",
           "If config is not writable, Config Preview can still render YAML, but Apply Config will fail. Check the compose mount for /home/n3kr0/Repos/llama-swap/config.yaml:/app/config.yaml.",
         ],
       },
       {
         id: "import-model",
         title: "Import Model",
-        summary: "Resolve Hugging Face repositories, choose files, start rig-side downloads, upload local files, and seed a model draft.",
+        summary: "The guided path from HF URL, upload, or existing file scan to managed model and config preview.",
         body: [
+          "The pipeline strip shows the current stage: Source, Files, Download, Managed Model, and Config. The goal is to keep the next required action visible instead of making you jump between pages and copy paths.",
           "Paste a Hugging Face repo or file URL, choose a role, optionally set a desired name, then Resolve Files. The manager classifies GGUF files, multipart shards, mmproj files, chat templates, and tokenizer-like files.",
-          "Stage Import shows where the selected files will land. Start Download creates a background job that writes directly to /models/<role>/... inside the manager container, which is the same model root llama-swap sees.",
-          "The Download Queue shows status, file count, destination, progress, bytes downloaded, total bytes, and active file for new downloads. After completion, save the draft so the model entry can generate config.",
+          "Preview Destination shows where the selected files will land. Start Download creates a background job that writes into a per-model directory under /models/<role>/<model-id>/, which is the same model root llama-swap sees.",
+          "Ready Downloads lists completed jobs whose files are not referenced by a managed model yet. Create Managed Model lets the backend infer the role, primary GGUF, companion files, TTL, and default flags from the job.",
+          "Scan Existing Files searches /models for GGUF and companion files already on disk. Use Create model on a scanned GGUF when you downloaded or copied files outside the manager.",
+          "The Download Queue is the detailed history and control surface. It shows status, progress, bytes, active file, destination, written/container paths, cancel, retry, create, and Clear Finished.",
         ],
         warnings: [
           "For multipart GGUF models, select every shard needed by the model. A future validation pass will enforce this more strongly.",

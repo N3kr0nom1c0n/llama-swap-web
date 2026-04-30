@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import uuid
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -174,13 +175,16 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         settings = db.get_settings()
         container_dir = getattr(settings.role_directories, payload.role)
         try:
-            manager_dir = safe_join(settings.manager_model_root, Path(container_dir).relative_to(settings.llama_swap_model_root))
+            role_relative = Path(container_dir).relative_to(settings.llama_swap_model_root)
+            model_dir = _import_model_directory(payload)
+            manager_dir = safe_join(settings.manager_model_root, role_relative, model_dir)
+            llama_dir = str(Path(container_dir) / model_dir).replace("\\", "/")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
             "role": payload.role,
             "destination_dir": str(manager_dir),
-            "container_dir": container_dir,
+            "container_dir": llama_dir,
             "selected_files": payload.selected_files,
             "desired_name": payload.desired_name,
             "gpu_devices": payload.gpu_devices,
@@ -462,6 +466,16 @@ def _safe_path_component(value: str, label: str) -> str:
     if ".." in candidate.parts:
         raise ValueError(f"{label} cannot contain traversal")
     return value
+
+
+def _import_model_directory(payload: ImportDraftRequest) -> str:
+    raw_name = payload.desired_name.strip()
+    if not raw_name and payload.hf_url:
+        raw_name = payload.hf_url.rstrip("/").split("/")[-1]
+    if not raw_name and payload.selected_files:
+        raw_name = Path(payload.selected_files[0]).stem
+    slug = re.sub(r"-+", "-", re.sub(r"[^a-zA-Z0-9._-]+", "-", raw_name or "model")).strip("-._")
+    return _safe_path_component(slug or "model", "model directory")
 
 
 def _path_status(path: Path) -> dict:

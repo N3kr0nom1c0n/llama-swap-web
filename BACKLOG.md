@@ -20,6 +20,16 @@ This backlog is still the source of truth for remaining v1 work. The superseding
 - Config backup restore: Config Preview now lists backups and can restore a selected backup through the API/UI while first backing up the current config.
 - Documentation: README, in-app Help, and `docs/wiki/` now cover production Docker, native setup, settings, model workflows, GPU planning, config preview/apply/restore, troubleshooting, and release QA.
 
+### Completed In Visible Workflow Recovery Pass
+
+- Dashboard now shows action-oriented next steps instead of a raw download-job metric: active downloads, failed/cancelled downloads, downloaded-but-unconfigured jobs, and config-write blockers.
+- Import Model now has a guided lifecycle strip: source, files, download, managed model, and config preview/apply.
+- Completed downloads with saved files are surfaced as "Ready to configure" and can create managed model entries directly from the download job.
+- Completed queue rows now show written/container file paths so the user can see where the model landed.
+- Existing `/models` files can be scanned from the UI and turned into managed model entries without copying paths manually.
+- Import staging now uses per-model destination folders under `/models/<role>/<model-id>/` instead of dumping downloads directly into the role root.
+- Download Queue now exposes the existing terminal-job cleanup API through a "Clear Finished" action.
+
 ### Still Open Before A v1.0 Tag
 
 - Add audit logging for settings changes, HF token changes, downloads, uploads, model edits, config preview/apply, and backup restore.
@@ -273,11 +283,7 @@ Status note: items completed by later work are summarized in the production hard
 
 ## Next
 
-- High priority: remove the manual gap between downloading a model and managing it. A completed download should immediately offer or create a guided managed-model setup with inferred name, role, primary GGUF, companion mmproj/template files, GPU defaults, command defaults, and config preview readiness. The user should not have to look up paths or manually copy downloaded file paths into Models.
-- Move the full Download Queue off Dashboard. Dashboard should only show active download summaries, failures, or warnings; the detailed queue/history belongs on Import Model or a dedicated Downloads page.
-- Make completed downloads clearly become usable model assets. Show the saved file paths for completed jobs, add a "Create model from download" action, and/or auto-fill a managed model draft after download completion so users can see where the model was installed.
 - Persist Hugging Face cache outside the container so interrupted downloads can resume across container recreates.
-- Add a queue cleanup action for completed, failed, and cancelled jobs.
 - Add disk-space checks before starting a download and show the estimate in the import flow.
 - Add validation that selected multipart GGUF shards include every required shard.
 
@@ -303,3 +309,9 @@ Status note: items completed by later work are summarized in the production hard
 - Reset GPU Planner tensor split recommendations when the device draft changes.
 - Gate mutating Playwright smoke tests behind `ALLOW_E2E_MUTATIONS=1` and document disposable-target usage.
 - Enforce model seed -> config preview -> config apply -> backup creation in CI container smoke.
+- Remove the manual gap between downloading a model and managing it by surfacing ready downloads and creating managed model entries from completed download jobs.
+- Move raw download history off Dashboard and keep the detailed queue on Import Model.
+- Show completed download file paths and provide a direct "Create Managed Model" action.
+- Add a queue cleanup action for completed, failed, and cancelled jobs.
+- Add UI scanning for existing `/models` files and create managed model entries from discovered GGUFs.
+- Use per-model import destination folders under `/models/<role>/<model-id>/`.

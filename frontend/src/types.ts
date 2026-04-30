@@ -121,6 +121,14 @@ export interface HfFile {
   group: string;
 }
 
+export interface FileInventoryItem {
+  manager_path: string;
+  container_path: string;
+  relative_path: string;
+  kind: HfFile["kind"];
+  size: number;
+}
+
 export interface HfResolveResponse {
   repo_id: string;
   revision: string;

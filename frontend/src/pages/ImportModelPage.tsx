@@ -1,20 +1,33 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, FileCheck2, FilePlus2, Link2, RotateCcw, Save, Upload, XCircle } from "lucide-react";
+import { Download, FileCheck2, FilePlus2, FolderSearch, Link2, RotateCcw, Save, Upload, XCircle } from "lucide-react";
 import { useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { CodeBlock } from "../components/CodeBlock";
 import { Field } from "../components/Field";
 import { PageHeader } from "../components/PageHeader";
 import { JobStatusPill, StatusPill } from "../components/StatusPill";
+import {
+  formatBytes,
+  isJobActive,
+  isJobManaged,
+  isJobReadyForModel,
+  isTerminalJob,
+  jobFilePaths,
+  managedModelFromInventoryItem,
+} from "../downloadWorkflow";
 import { queryKeys } from "../queryKeys";
-import type { DownloadJob, HfFile, ManagedModel, ModelRole } from "../types";
+import type { DownloadJob, FileInventoryItem, HfFile, ManagedModel, ModelRole } from "../types";
 import { emptyModel, modelRoles } from "../types";
 import { defaultTtlForRole, modelCommand, safeMatrixKey } from "../utils";
 
 export function ImportModelPage() {
   const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
+  const focusedJobId = searchParams.get("job") ?? "";
   const settings = useQuery({ queryKey: queryKeys.settings, queryFn: api.settings });
   const gpus = useQuery({ queryKey: queryKeys.gpus, queryFn: api.gpus });
+  const models = useQuery({ queryKey: queryKeys.models, queryFn: api.models });
   const [role, setRole] = useState<ModelRole>("chat");
   const [hfUrl, setHfUrl] = useState("");
   const [revision, setRevision] = useState("main");
@@ -23,10 +36,12 @@ export function ImportModelPage() {
   const [gpuDevices, setGpuDevices] = useState<number[]>([]);
   const [draft, setDraft] = useState<ManagedModel>(emptyModel());
   const [lastJobId, setLastJobId] = useState("");
+  const [installMessage, setInstallMessage] = useState("");
+  const [scanMessage, setScanMessage] = useState("");
   const jobs = useQuery({
-    queryKey: ["downloads"],
+    queryKey: queryKeys.downloads,
     queryFn: api.downloads,
-    refetchInterval: (query) => (query.state.data?.some((item) => item.status === "running" || item.status === "queued") ? 1500 : false),
+    refetchInterval: (query) => (query.state.data?.some(isJobActive) ? 1500 : false),
   });
 
   const resolve = useMutation({
@@ -56,7 +71,7 @@ export function ImportModelPage() {
         hf_url: hfUrl,
         hf_revision: revision,
         selected_files: selectedFiles,
-        desired_name: desiredName,
+        desired_name: currentDesiredName(),
         gpu_devices: gpuDevices,
       });
       return api.startDownload({
@@ -64,12 +79,12 @@ export function ImportModelPage() {
         revision: resolve.data?.revision ?? revision,
         files: selectedFiles,
         destination_dir: importDraft.destination_dir,
-        model_id: draft.id,
+        model_id: draft.id || currentDesiredName(),
       });
     },
     onSuccess: (job) => {
       setLastJobId(job.id);
-      void queryClient.invalidateQueries({ queryKey: ["downloads"] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.downloads });
     },
   });
   const job = useQuery({
@@ -88,6 +103,15 @@ export function ImportModelPage() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.state });
     },
   });
+  const saveScannedModel = useMutation({
+    mutationFn: api.saveModel,
+    onSuccess: (model) => {
+      setDraft(model);
+      setScanMessage(`Managed model ${model.id} created from existing file. Preview config when ready.`);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.models });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.state });
+    },
+  });
   const installModel = useMutation({
     mutationFn: ({ downloadJob, includeDraftContext }: { downloadJob: DownloadJob; includeDraftContext: boolean }) =>
       api.createModelFromDownload(downloadJob.id, modelFromDownloadPayload(includeDraftContext)),
@@ -97,15 +121,16 @@ export function ImportModelPage() {
       setGpuDevices(model.gpu_devices);
       setHfUrl(model.hf_url);
       setRevision(model.hf_revision);
+      setInstallMessage(`Managed model ${model.id} created. Next: tune it or preview config.`);
       void queryClient.invalidateQueries({ queryKey: queryKeys.models });
       void queryClient.invalidateQueries({ queryKey: queryKeys.state });
-      void queryClient.invalidateQueries({ queryKey: ["downloads"] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.downloads });
     },
   });
   const cancelJob = useMutation({
     mutationFn: api.cancelDownload,
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["downloads"] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.downloads });
       if (lastJobId) void queryClient.invalidateQueries({ queryKey: ["download", lastJobId] });
     },
   });
@@ -113,9 +138,17 @@ export function ImportModelPage() {
     mutationFn: api.retryDownload,
     onSuccess: (newJob) => {
       setLastJobId(newJob.id);
-      void queryClient.invalidateQueries({ queryKey: ["downloads"] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.downloads });
     },
   });
+  const cleanupJobs = useMutation({
+    mutationFn: api.cleanupTerminalDownloads,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.downloads });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.state });
+    },
+  });
+  const scanExisting = useMutation({ mutationFn: api.scanModels });
   const upload = useMutation({
     mutationFn: async (file: File) => api.upload(role, file),
     onSuccess: (data) => {
@@ -136,9 +169,22 @@ export function ImportModelPage() {
 
   const selectedHfFiles = useMemo(() => resolve.data?.files.filter((file) => selectedFiles.includes(file.path)) ?? [], [resolve.data, selectedFiles]);
   const command = modelCommand({ ...draft, gpu_devices: gpuDevices }, settings.data);
+  const sortedJobs = useMemo(() => {
+    const list = jobs.data ?? [];
+    if (!focusedJobId) return list;
+    return [...list].sort((left, right) => Number(right.id === focusedJobId) - Number(left.id === focusedJobId));
+  }, [focusedJobId, jobs.data]);
+  const readyJobs = sortedJobs.filter((item) => isJobReadyForModel(item, models.data));
+  const activeJobs = sortedJobs.filter(isJobActive);
+  const terminalJobCount = sortedJobs.filter(isTerminalJob).length;
+  const scannedItems = scanExisting.data ?? [];
 
   function toggleFile(file: HfFile) {
     setSelectedFiles((current) => (current.includes(file.path) ? current.filter((item) => item !== file.path) : [...current, file.path]));
+  }
+
+  function currentDesiredName() {
+    return desiredName || draft.display_name || draft.id || resolve.data?.repo_id.split("/").pop() || "";
   }
 
   function saveDraft() {
@@ -180,12 +226,67 @@ export function ImportModelPage() {
   }
 
   function installDownloadedModel(downloadJob: DownloadJob, includeDraftContext = false) {
+    setInstallMessage("");
     installModel.mutate({ downloadJob, includeDraftContext });
+  }
+
+  function createModelFromScan(item: FileInventoryItem) {
+    const model = managedModelFromInventoryItem(item, settings.data);
+    setScanMessage("");
+    saveScannedModel.mutate(model);
   }
 
   return (
     <div className="page">
       <PageHeader title="Import Model" description="Resolve Hugging Face files, stage rig-side downloads, upload local GGUFs, and create a draft model entry." />
+
+      <section className="panel">
+        <div className="panel-header">
+          <h2>Import Pipeline</h2>
+          <StatusPill tone={readyJobs.length ? "warn" : activeJobs.length ? "idle" : "ok"}>
+            {readyJobs.length ? `${readyJobs.length} ready to configure` : activeJobs.length ? "downloading" : "ready"}
+          </StatusPill>
+        </div>
+        <div className="pipeline-steps">
+          <PipelineStep title="1. Source" state={resolve.data || upload.data ? "done" : "current"} detail={resolve.data?.repo_id || (upload.data ? "uploaded file" : "HF URL, upload, or existing file scan")} />
+          <PipelineStep title="2. Files" state={selectedFiles.length || draft.container_files.length ? "done" : "idle"} detail={selectedFiles.length ? `${selectedFiles.length} selected` : draft.container_files.length ? `${draft.container_files.length} local file(s)` : "choose the GGUF and support files"} />
+          <PipelineStep title="3. Download" state={activeJobs.length ? "current" : readyJobs.length ? "done" : "idle"} detail={activeJobs.length ? `${activeJobs.length} active` : readyJobs.length ? "download complete" : "rig-side transfer"} />
+          <PipelineStep title="4. Managed Model" state={installModel.data || saveModel.isSuccess || saveScannedModel.data ? "done" : readyJobs.length ? "current" : "idle"} detail={installModel.data || saveModel.isSuccess || saveScannedModel.data ? "entry created" : readyJobs.length ? "create the model entry" : "not configured yet"} />
+          <PipelineStep title="5. Config" state={installModel.data || saveModel.isSuccess || saveScannedModel.data ? "current" : "idle"} detail="preview, validate, backup, apply" />
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <h2>Ready Downloads</h2>
+          <StatusPill tone={readyJobs.length ? "warn" : "idle"}>{readyJobs.length ? `${readyJobs.length} need setup` : "none waiting"}</StatusPill>
+        </div>
+        {readyJobs.length ? (
+          <div className="action-list">
+            {readyJobs.map((downloadJob) => (
+              <div className="action-card" key={downloadJob.id}>
+                <div>
+                  <strong>Ready to configure</strong>
+                  <span>{downloadJob.repo_id || downloadJob.id}</span>
+                  <div className="path-list">
+                    {jobFilePaths(downloadJob).map((path) => (
+                      <code key={path}>{path}</code>
+                    ))}
+                  </div>
+                </div>
+                <button className="button" type="button" disabled={installModel.isPending} onClick={() => installDownloadedModel(downloadJob)}>
+                  <FileCheck2 size={16} aria-hidden="true" />
+                  Create Managed Model
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state">
+            Completed downloads that are not connected to a managed model will appear here. That is the handoff before Config Preview.
+          </div>
+        )}
+      </section>
 
       <section className="panel">
         <div className="panel-header">
@@ -217,6 +318,10 @@ export function ImportModelPage() {
             <Link2 size={16} aria-hidden="true" />
             Resolve Files
           </button>
+          <button className="button secondary" type="button" onClick={() => scanExisting.mutate()} disabled={scanExisting.isPending}>
+            <FolderSearch size={16} aria-hidden="true" />
+            Scan Existing Files
+          </button>
           <label className="button secondary file-button">
             <Upload size={16} aria-hidden="true" />
             Upload GGUF
@@ -225,7 +330,50 @@ export function ImportModelPage() {
         </div>
         {resolve.error ? <p className="form-error">{resolve.error.message}</p> : null}
         {upload.error ? <p className="form-error">{upload.error.message}</p> : null}
+        {scanExisting.error ? <p className="form-error">{scanExisting.error.message}</p> : null}
+        {scanMessage ? <p className="form-success">{scanMessage}</p> : null}
       </section>
+
+      {scannedItems.length ? (
+        <section className="panel">
+          <div className="panel-header">
+            <h2>Files Already On Disk</h2>
+            <StatusPill tone="idle">{scannedItems.length} files</StatusPill>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Path</th>
+                  <th>Kind</th>
+                  <th>Size</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {scannedItems.map((item) => (
+                  <tr key={item.container_path}>
+                    <td className="truncate">{item.relative_path}</td>
+                    <td>{item.kind}</td>
+                    <td>{formatBytes(item.size)}</td>
+                    <td>
+                      <button
+                        className="button secondary"
+                        type="button"
+                        aria-label={`Create model from ${item.relative_path}`}
+                        disabled={item.kind !== "gguf" || saveScannedModel.isPending}
+                        onClick={() => createModelFromScan(item)}
+                      >
+                        Create model
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
 
       {resolve.data ? (
         <section className="panel">
@@ -258,9 +406,9 @@ export function ImportModelPage() {
             </table>
           </div>
           <div className="inline-actions">
-            <button className="button" type="button" onClick={() => createImport.mutate({ role, source_type: "hf", hf_url: hfUrl, hf_revision: revision, selected_files: selectedFiles, desired_name: desiredName, gpu_devices: gpuDevices })}>
+            <button className="button" type="button" onClick={() => createImport.mutate({ role, source_type: "hf", hf_url: hfUrl, hf_revision: revision, selected_files: selectedFiles, desired_name: currentDesiredName(), gpu_devices: gpuDevices })}>
               <FilePlus2 size={16} aria-hidden="true" />
-              Stage Import
+              Preview Destination
             </button>
             <button className="button secondary" type="button" onClick={() => download.mutate()} disabled={!selectedFiles.length || download.isPending}>
               <Download size={16} aria-hidden="true" />
@@ -286,7 +434,7 @@ export function ImportModelPage() {
             <div className="inline-actions">
               <button className="button" type="button" disabled={installModel.isPending} onClick={() => installDownloadedModel(job.data as DownloadJob, true)}>
                 <FileCheck2 size={16} aria-hidden="true" />
-                Install Model
+                Create Managed Model
               </button>
             </div>
           ) : null}
@@ -297,7 +445,12 @@ export function ImportModelPage() {
       <section className="panel">
         <div className="panel-header">
           <h2>Download Queue</h2>
-          <StatusPill tone="idle">{jobs.data?.length ?? 0} jobs</StatusPill>
+          <div className="inline-actions">
+            <StatusPill tone="idle">{jobs.data?.length ?? 0} jobs</StatusPill>
+            <button className="button secondary" type="button" disabled={!terminalJobCount || cleanupJobs.isPending} onClick={() => cleanupJobs.mutate()}>
+              Clear Finished
+            </button>
+          </div>
         </div>
         <div className="table-wrap">
           <table>
@@ -312,7 +465,7 @@ export function ImportModelPage() {
                 </tr>
             </thead>
             <tbody>
-              {jobs.data?.map((queuedJob) => (
+              {sortedJobs.map((queuedJob) => (
                 <tr key={queuedJob.id}>
                   <td><JobStatusPill status={queuedJob.status} /></td>
                   <td>{queuedJob.repo_id || "-"}</td>
@@ -320,7 +473,16 @@ export function ImportModelPage() {
                   <td>
                     <QueueProgress job={queuedJob} />
                   </td>
-                  <td className="truncate">{queuedJob.destination_dir}</td>
+                  <td className="truncate">
+                    <span>{queuedJob.destination_dir}</span>
+                    {jobFilePaths(queuedJob).length ? (
+                      <div className="path-list compact">
+                        {jobFilePaths(queuedJob).map((path) => (
+                          <code key={path}>{path}</code>
+                        ))}
+                      </div>
+                    ) : null}
+                  </td>
                   <td>
                     <div className="inline-actions compact">
                       <button className="button secondary" type="button" disabled={!["queued", "running"].includes(queuedJob.status)} onClick={() => cancelJob.mutate(queuedJob.id)}>
@@ -331,9 +493,9 @@ export function ImportModelPage() {
                         <RotateCcw size={14} aria-hidden="true" />
                         Retry
                       </button>
-                      <button className="button" type="button" disabled={queuedJob.status !== "completed" || installModel.isPending} onClick={() => installDownloadedModel(queuedJob)}>
+                      <button className="button" type="button" disabled={!isJobReadyForModel(queuedJob, models.data) || installModel.isPending} onClick={() => installDownloadedModel(queuedJob)}>
                         <FileCheck2 size={14} aria-hidden="true" />
-                        Install Model
+                        {isJobManaged(queuedJob, models.data) ? "Configured" : "Create"}
                       </button>
                     </div>
                   </td>
@@ -386,8 +548,27 @@ export function ImportModelPage() {
         {saveModel.error ? <p className="form-error">{saveModel.error.message}</p> : null}
         {saveModel.isSuccess ? <p className="form-success">Draft model saved. Review matrix and config preview next.</p> : null}
         {installModel.error ? <p className="form-error">{installModel.error.message}</p> : null}
-        {installModel.data ? <p className="form-success">Managed model {installModel.data.id} created. Review it on the Models page.</p> : null}
+        {installMessage ? (
+          <div className="form-success action-success">
+            <span>{installMessage}</span>
+            <Link className="button secondary" to="/models">
+              Tune Managed Model
+            </Link>
+            <Link className="button secondary" to="/config">
+              Preview Config
+            </Link>
+          </div>
+        ) : null}
       </section>
+    </div>
+  );
+}
+
+function PipelineStep({ title, state, detail }: { title: string; state: "done" | "current" | "idle"; detail: string }) {
+  return (
+    <div className={`pipeline-step ${state}`}>
+      <strong>{title}</strong>
+      <span>{detail}</span>
     </div>
   );
 }
@@ -415,17 +596,4 @@ function QueueProgress({ job }: { job: DownloadJob }) {
       <span className="queue-progress-value">{value}%</span>
     </div>
   );
-}
-
-function formatBytes(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let size = value;
-  let index = 0;
-  while (size >= 1024 && index < units.length - 1) {
-    size /= 1024;
-    index += 1;
-  }
-  const precision = index === 0 || size >= 10 ? 0 : 1;
-  return `${size.toFixed(precision)} ${units[index]}`;
 }

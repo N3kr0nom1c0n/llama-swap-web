@@ -12,6 +12,8 @@ https://huggingface.co/org/model-repo
 
 The resolver lists files and classifies them as GGUF, multipart GGUF shard, mmproj, chat template, tokenizer, or other. For quantized repos, choose the quant family you actually want. Do not download every quant in a large repo unless that is deliberate.
 
+`Preview Destination` shows the target install directory before the download starts. New imports use a per-model layout under `/models/<role>/<model-id>/` so support files such as `mmproj-F16.gguf` and `chat_template.jinja` do not collide across models.
+
 ## Direct Hugging Face File URL
 
 Paste a direct file URL when you already know the exact quant:
@@ -46,6 +48,10 @@ Uploads are for local files already on your browser machine. The manager streams
 
 Use the model scanner when GGUF files already exist under `/models`. The scanner ignores unsafe symlinks and only returns supported model/companion file types.
 
+After scanning, use `Create model` on the primary GGUF. The manager fills the managed model entry from that path so you do not need to copy the file into the Models form manually.
+
 ## Completed But Unconfigured Downloads
 
-A completed download is not useful until a managed model entry references it. Use the install/create action from the download queue so the manager can infer files, role, ttl, and defaults. This is the bridge the app is meant to automate.
+A completed download is not useful until a managed model entry references it. `Ready Downloads` shows completed jobs that are not configured yet. Use `Create Managed Model` so the manager can infer files, role, ttl, and defaults. This is the bridge the app is meant to automate.
+
+Dashboard only shows the action state: active downloads, failed downloads, completed-but-unconfigured downloads, and config blockers. The detailed queue lives on Import Model, where `Clear Finished` removes completed, failed, and cancelled job history without deleting model files.

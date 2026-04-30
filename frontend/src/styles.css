@@ -336,6 +336,103 @@ main {
   padding-left: 18px;
 }
 
+.action-list {
+  display: grid;
+  gap: 10px;
+}
+
+.action-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #14191f;
+}
+
+.action-card.warn {
+  border-color: rgba(241, 201, 107, 0.42);
+  background: rgba(241, 201, 107, 0.06);
+}
+
+.action-card.ok {
+  border-color: rgba(98, 198, 164, 0.38);
+  background: rgba(98, 198, 164, 0.06);
+}
+
+.action-card strong,
+.action-card span,
+.action-card code {
+  display: block;
+}
+
+.action-card span,
+.action-card code {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.action-card code {
+  max-width: 860px;
+  overflow-wrap: anywhere;
+  font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+.pipeline-steps {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.pipeline-step {
+  display: grid;
+  gap: 7px;
+  min-height: 86px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #14191f;
+}
+
+.pipeline-step span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.pipeline-step.current {
+  border-color: rgba(124, 167, 255, 0.5);
+  background: rgba(124, 167, 255, 0.07);
+}
+
+.pipeline-step.done {
+  border-color: rgba(98, 198, 164, 0.45);
+  background: rgba(98, 198, 164, 0.07);
+}
+
+.path-list {
+  display: grid;
+  gap: 4px;
+  margin-top: 7px;
+}
+
+.path-list.compact {
+  margin-top: 5px;
+  gap: 3px;
+}
+
+.path-list code {
+  display: block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.74rem;
+}
+
 .two-column,
 .split-code,
 .models-layout {
@@ -1006,6 +1103,13 @@ pre {
 
 .form-success {
   color: var(--ok);
+}
+
+.action-success {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .sr-only {

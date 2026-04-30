@@ -7,9 +7,11 @@ The app is intentionally local/LAN focused. Version 1 has no login, does not mou
 ## What It Does
 
 - Resolve Hugging Face model or file URLs and classify GGUF files, multipart shards, mmproj files, chat templates, and tokenizer-side files.
-- Download selected files directly on the rig into role-based model directories.
+- Download selected files directly on the rig into per-model directories under `/models/<role>/<model-id>/`.
 - Upload local model files into the mounted model root.
 - Track queued/running/completed/cancelled download jobs with progress.
+- Turn completed downloads or existing scanned `/models` files into managed model entries without copying paths.
+- Show Dashboard next actions for active downloads, failed jobs, downloaded-but-unconfigured files, and config blockers.
 - Manage model metadata, GPU placement, llama.cpp flags, aliases, preload behavior, and matrix membership.
 - Generate a llama-swap `matrix` config preview with a unified diff.
 - Validate staged YAML, create a timestamped backup, and apply the config only after approval.

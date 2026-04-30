@@ -53,6 +53,7 @@ describe("ImportModelPage", () => {
       const url = String(input);
       if (url.endsWith("/api/settings")) return Promise.resolve(jsonResponse(settingsPayload));
       if (url.endsWith("/api/gpus")) return Promise.resolve(jsonResponse([]));
+      if (url.endsWith("/api/models")) return Promise.resolve(jsonResponse([]));
       if (url.endsWith("/api/downloads")) {
         return Promise.resolve(
           jsonResponse([
@@ -92,11 +93,12 @@ describe("ImportModelPage", () => {
     expect(within(row.closest("tr") as HTMLTableRowElement).getByText("model.gguf")).toBeInTheDocument();
   });
 
-  it("installs a completed download as a managed model from the queue", async () => {
+  it("turns a completed download into the next model setup step", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
       const url = String(input);
       if (url.endsWith("/api/settings")) return Promise.resolve(jsonResponse(settingsPayload));
       if (url.endsWith("/api/gpus")) return Promise.resolve(jsonResponse([]));
+      if (url.endsWith("/api/models")) return Promise.resolve(jsonResponse([]));
       if (url.endsWith("/api/downloads")) {
         return Promise.resolve(
           jsonResponse([
@@ -156,7 +158,10 @@ describe("ImportModelPage", () => {
 
     renderWithProviders(<ImportModelPage />);
 
-    const installButton = await screen.findByRole("button", { name: "Install Model" });
+    await screen.findByText("Ready to configure");
+    expect(screen.getAllByText("/models/chat/repo/model.gguf").length).toBeGreaterThan(0);
+
+    const installButton = await screen.findByRole("button", { name: "Create Managed Model" });
     expect(installButton).not.toBeDisabled();
     fireEvent.click(installButton);
 
@@ -166,7 +171,9 @@ describe("ImportModelPage", () => {
         expect.objectContaining({ method: "POST" }),
       ),
     );
-    await screen.findByText((_content, element) => element?.textContent === "Managed model repo created. Review it on the Models page.");
+    await screen.findByText((_content, element) => element?.textContent === "Managed model repo created. Next: tune it or preview config.");
+    expect(screen.getByRole("link", { name: "Tune Managed Model" })).toHaveAttribute("href", "/models");
+    expect(screen.getByRole("link", { name: "Preview Config" })).toHaveAttribute("href", "/config");
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/models/from-download/job-1",
       expect.objectContaining({ method: "POST" }),
@@ -179,6 +186,7 @@ describe("ImportModelPage", () => {
       const url = String(input);
       if (url.endsWith("/api/settings")) return Promise.resolve(jsonResponse(settingsPayload));
       if (url.endsWith("/api/gpus")) return Promise.resolve(jsonResponse([]));
+      if (url.endsWith("/api/models")) return Promise.resolve(jsonResponse([]));
       if (url.endsWith("/api/downloads")) {
         return Promise.resolve(
           jsonResponse([
@@ -239,13 +247,109 @@ describe("ImportModelPage", () => {
     renderWithProviders(<ImportModelPage />);
     fireEvent.change(await screen.findByLabelText("Desired name"), { target: { value: "stale-draft" } });
 
-    fireEvent.click(await screen.findByRole("button", { name: "Install Model" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Create Managed Model" }));
 
     await waitFor(() => expect(installBody).not.toBeNull());
     expect(installBody).not.toHaveProperty("role");
     expect(installBody).not.toHaveProperty("ttl");
     expect(installBody).not.toHaveProperty("id");
     expect(installBody).not.toHaveProperty("display_name");
+  });
+
+  it("creates a managed model from an existing scanned GGUF without manual path copying", async () => {
+    let savedModel: Record<string, unknown> | null = null;
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/settings")) return Promise.resolve(jsonResponse(settingsPayload));
+      if (url.endsWith("/api/gpus")) return Promise.resolve(jsonResponse([]));
+      if (url.endsWith("/api/downloads")) return Promise.resolve(jsonResponse([]));
+      if (url.endsWith("/api/models/scan")) {
+        return Promise.resolve(
+          jsonResponse([
+            {
+              manager_path: "/models/chat/tiny/tiny.gguf",
+              container_path: "/models/chat/tiny/tiny.gguf",
+              relative_path: "chat/tiny/tiny.gguf",
+              kind: "gguf",
+              size: 1024,
+            },
+          ]),
+        );
+      }
+      if (url.endsWith("/api/models") && init?.method === "POST") {
+        savedModel = JSON.parse(String(init.body));
+        return Promise.resolve(jsonResponse(savedModel));
+      }
+      if (url.endsWith("/api/models")) return Promise.resolve(jsonResponse([]));
+      return Promise.reject(new Error(`Unexpected fetch ${url}`));
+    });
+
+    renderWithProviders(<ImportModelPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Scan Existing Files" }));
+    await screen.findByText("chat/tiny/tiny.gguf");
+    fireEvent.click(screen.getByRole("button", { name: "Create model from chat/tiny/tiny.gguf" }));
+
+    await waitFor(() => expect(savedModel).not.toBeNull());
+    expect(savedModel).toMatchObject({
+      id: "tiny",
+      display_name: "tiny",
+      role: "chat",
+      source_type: "manual",
+      primary_model_file: "/models/chat/tiny/tiny.gguf",
+      container_files: ["/models/chat/tiny/tiny.gguf"],
+    });
+    await screen.findByText("Managed model tiny created from existing file. Preview config when ready.");
+  });
+
+  it("clears finished download jobs from the queue", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/settings")) return Promise.resolve(jsonResponse(settingsPayload));
+      if (url.endsWith("/api/gpus")) return Promise.resolve(jsonResponse([]));
+      if (url.endsWith("/api/models")) return Promise.resolve(jsonResponse([]));
+      if (url.endsWith("/api/downloads/terminal")) {
+        expect(init?.method).toBe("DELETE");
+        return Promise.resolve(jsonResponse({ removed: 1 }));
+      }
+      if (url.endsWith("/api/downloads")) {
+        return Promise.resolve(
+          jsonResponse([
+            {
+              id: "done-job",
+              status: "completed",
+              repo_id: "org/repo",
+              revision: "main",
+              files: ["model.gguf"],
+              destination_dir: "/models/chat/repo",
+              container_dir: "/models/chat/repo",
+              written_files: ["/models/chat/repo/model.gguf"],
+              container_files: ["/models/chat/repo/model.gguf"],
+              progress: 100,
+              bytes_downloaded: 100,
+              bytes_total: 100,
+              active_file: "",
+              logs: [],
+              error: "",
+            },
+          ]),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected fetch ${url}`));
+    });
+
+    renderWithProviders(<ImportModelPage />);
+
+    const clearButton = await screen.findByRole("button", { name: "Clear Finished" });
+    await waitFor(() => expect(clearButton).not.toBeDisabled());
+    fireEvent.click(clearButton);
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/downloads/terminal",
+        expect.objectContaining({ method: "DELETE" }),
+      ),
+    );
   });
 });
 
