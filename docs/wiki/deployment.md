@@ -17,6 +17,17 @@ volumes:
 
 Do not mount host `/tmp` into the manager container for normal operation. Use `/data/tmp`.
 
+Optional manual restart controls require a Docker socket mount:
+
+```yaml
+group_add:
+  - "${DOCKER_SOCKET_GID:?Set DOCKER_SOCKET_GID to the Docker socket group id}"
+volumes:
+  - /var/run/docker.sock:/var/run/docker.sock
+```
+
+On Linux, set `DOCKER_SOCKET_GID=$(stat -c '%g' /var/run/docker.sock)` in `.env` so the non-root manager can read and write the socket. Then enable `LLAMA_SWAP_RESTART_ENABLED=true` and set `LLAMA_SWAP_CONTAINER_NAME=llama-swap`. `.env` values are first-run defaults; for existing manager installs, change these values in Settings. Mounting the Docker socket grants Docker control on the host, so keep this LAN-only or behind your own auth layer.
+
 ## Permissions
 
 The image runs as UID/GID `10001:10001`. The mounted model root, config file, backups dir, and env file need to be writable by that user if the manager should edit them.

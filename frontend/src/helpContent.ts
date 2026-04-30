@@ -36,7 +36,7 @@ export const helpSections: HelpSection[] = [
         summary: "Nothing should silently rewrite llama-swap. The manager keeps import, download, preview, backup, and apply as separate steps.",
         body: [
           "Use Import Model to resolve Hugging Face files or upload local files. Use Models to refine the model entry. Use Config Preview to inspect generated YAML and diff before applying it.",
-          "Applying config creates a timestamped backup in /backups before writing /app/config.yaml. Version 1 does not restart llama-swap for you, so restart llama-swap manually after applying a config.",
+          "Applying config creates a timestamped backup in /backups before writing /app/config.yaml. The manager does not restart llama-swap automatically as part of apply; restart manually or use the optional Config Preview restart button after you explicitly enable Docker socket access.",
           "Generated commands should use the container model path /models/... because llama-swap runs inside Docker. Host paths such as /home/n3kr0/Repos/llama.cpp/models are only used by Docker volume mounts and the manager's write path.",
         ],
         examples: [
@@ -46,7 +46,7 @@ export const helpSections: HelpSection[] = [
         ],
         warnings: [
           "Do not point generated llama-server commands at host-only paths. The llama-swap container will not be able to read them.",
-          "The manager intentionally has no Docker socket in v1. Config apply and llama-swap restart are separate actions.",
+          "Docker socket access is disabled by default. Only enable restart controls if the manager is on a trusted LAN and the socket mount is intentional.",
         ],
       },
       {
@@ -157,21 +157,23 @@ export const helpSections: HelpSection[] = [
           "Config Preview renders the full config.yaml content from saved model entries. It also shows a unified diff against the current mounted config file.",
           "Apply Config writes only a staged preview. If model entries change after preview, regenerate before applying. This prevents applying a config you did not inspect.",
           "The Backups section lists safe config backups created by apply or restore. Restoring a backup first backs up the current config, then replaces the active config with the selected backup.",
-          "After apply, restart llama-swap manually. Version 1 does not restart Docker services.",
+          "After apply, restart llama-swap manually or use the llama-swap Runtime panel if restart controls are enabled. Config apply and restart remain separate actions.",
+          "The llama-swap Runtime panel checks the configured Docker socket and container name. The restart button stays disabled if the socket is missing, the container is unavailable, or Settings has restart control disabled.",
         ],
         warnings: [
           "Never apply a config if validation errors remain.",
           "Backups are created first, but a bad config can still stop llama-swap from loading models until corrected or restored.",
-          "Restore also requires a manual llama-swap restart before the restored config is used.",
+          "Restore also requires a llama-swap restart before the restored config is used.",
         ],
       },
       {
         id: "settings",
         title: "Settings",
-        summary: "Global paths, defaults, Hugging Face token handling, role directories, and command defaults.",
+        summary: "Global paths, defaults, Hugging Face token handling, optional restart controls, role directories, and command defaults.",
         body: [
           "Settings controls the assumptions used by every other page. Path settings affect where files are written and how commands are generated. Defaults affect newly created model entries and generated commands.",
           "The Hugging Face token is stored in the manager env file and is never returned by the API. The UI only shows whether a token exists and where it is stored.",
+          "llama-swap Restart Control is an explicit opt-in. Enabling it does not restart anything by itself; it only allows the Config Preview page to call Docker for the configured container when you click the restart button.",
         ],
       },
     ],
@@ -249,6 +251,47 @@ export const helpSections: HelpSection[] = [
             effect: "Usually /app/.env, mounted from /home/n3kr0/Repos/llama.web/.env.",
             guidance: "If this says environment, the token came from container env rather than the editable manager env file.",
           },
+        ],
+      },
+      {
+        id: "restart-control-settings",
+        title: "llama-swap restart control",
+        summary: "Optional Docker socket integration for a manual restart button.",
+        body: [
+          "Restart control is disabled by default because the Docker socket can control containers on the host. It should only be enabled in a trusted LAN deployment where the manager container intentionally mounts /var/run/docker.sock.",
+          "When enabled, Config Preview shows the llama-swap Runtime panel. The panel checks whether the Docker socket exists, whether the configured container can be inspected, and whether the container is running.",
+          "This does not change config apply behavior. Apply still backs up and writes config first; restart remains a separate button press.",
+          "On an existing install, the values saved in Settings are what the backend uses. .env values only seed the first database initialization.",
+          "Because the manager runs as a non-root user, compose needs a group_add entry using the group id of /var/run/docker.sock or the socket will be mounted but unreadable.",
+        ],
+        settings: [
+          {
+            name: "Enable llama-swap restart control",
+            purpose: "Turns on Docker socket status checks and the manual restart button.",
+            effect: "Config Preview can restart the configured container after you click Restart llama-swap.",
+            guidance: "Leave disabled unless compose mounts /var/run/docker.sock and the manager stays LAN-only.",
+          },
+          {
+            name: "llama-swap container name",
+            purpose: "Docker container name to inspect and restart.",
+            effect: "If this does not match the live container, the runtime panel shows unavailable and restart stays disabled.",
+            guidance: "Use llama-swap for your current compose setup.",
+          },
+          {
+            name: "Docker socket path",
+            purpose: "Unix socket path inside the manager container.",
+            effect: "The backend uses this socket for Docker inspect and restart calls.",
+            guidance: "Use /var/run/docker.sock when compose mounts the host socket there.",
+          },
+          {
+            name: "Restart timeout seconds",
+            purpose: "Timeout passed to Docker restart.",
+            effect: "Docker waits this many seconds for graceful shutdown before force-stopping the container.",
+            guidance: "30 seconds is a reasonable default. Increase it if llama-swap needs longer to exit cleanly.",
+          },
+        ],
+        warnings: [
+          "A Docker socket mount is effectively host-level Docker control. Do not expose this app outside your trusted LAN without an external auth layer.",
         ],
       },
       {

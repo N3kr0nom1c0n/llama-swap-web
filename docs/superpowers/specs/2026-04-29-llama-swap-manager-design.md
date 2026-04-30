@@ -93,7 +93,7 @@ LLAMA_SERVER_CMD=/app/llama-server
 
 `MANAGER_MODEL_ROOT` is where the manager container writes files. `LLAMA_SWAP_MODEL_ROOT` is the path written into generated llama-swap commands. In the current Compose layout both are `/models`, which is the simplest and least error-prone setup.
 
-No Docker socket is mounted in v1. The app does not restart llama-swap. After a config is applied, the UI tells the user to manually run:
+Baseline v1 does not mount the Docker socket and does not restart llama-swap automatically during config apply. Optional manual restart controls can be enabled by explicitly mounting the Docker socket and turning on the Settings opt-in. Without that opt-in, after a config is applied, the UI tells the user to manually run:
 
 ```bash
 docker compose restart llama-swap

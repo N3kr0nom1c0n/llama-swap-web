@@ -8,6 +8,7 @@ Settings control manager runtime behavior, download behavior, generated commands
 - Data dir: persistent state root. SQLite and cache-related data should live here.
 - Max parallel downloads: download concurrency. Higher values can saturate disk and network.
 - Disk safety GB: free-space reserve. Downloads and validation should not consume the last usable space.
+- llama-swap restart control: optional Docker socket integration for a manual Config Preview restart button.
 
 ## Paths
 
@@ -49,3 +50,14 @@ Changing defaults does not rewrite existing models automatically. Edit existing 
 The HF token is read from environment or the manager env file. The API only reports whether a token is configured and where it came from. Use a read token for gated/private models. Rotate it in Hugging Face if it is exposed.
 
 The manager writes token changes atomically so partial `.env` writes do not leave a broken token file.
+
+## llama-swap Restart Control
+
+Restart control is disabled by default. When enabled, the backend checks the configured Docker socket and container name, then Config Preview shows a manual `Restart llama-swap` button. `.env` restart values are startup defaults for a new database only; after first launch, the Settings page is the source of truth.
+
+- Enable llama-swap restart control: opt-in switch. Nothing restarts until the button is clicked.
+- llama-swap container name: Docker container to inspect and restart, usually `llama-swap`.
+- Docker socket path: socket path inside the manager container, usually `/var/run/docker.sock`.
+- Restart timeout seconds: Docker restart timeout before force-stop.
+
+Mounting `/var/run/docker.sock` gives the manager container Docker control on the host. Because the image runs as UID/GID `10001:10001`, compose also needs `group_add` with the host Docker socket group id. Keep the app LAN-only or behind your own auth layer when this is enabled.

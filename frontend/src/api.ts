@@ -11,6 +11,8 @@ import type {
   GpuDevice,
   GpuRecommendationResponse,
   HfResolveResponse,
+  LlamaSwapRestartResponse,
+  LlamaSwapRuntimeStatus,
   ManagedModel,
   ManagerSettings,
   ModelRole,
@@ -44,6 +46,8 @@ export const api = {
   saveHfToken: (token: string) =>
     request<ManagerSettings>("/api/settings/hf-token", { method: "PUT", body: JSON.stringify({ token }) }),
   clearHfToken: () => request<ManagerSettings>("/api/settings/hf-token", { method: "DELETE" }),
+  llamaSwapStatus: () => request<LlamaSwapRuntimeStatus>("/api/llama-swap/status"),
+  restartLlamaSwap: () => request<LlamaSwapRestartResponse>("/api/llama-swap/restart", { method: "POST" }),
   gpus: () => request<GpuDevice[]>("/api/gpus"),
   saveGpus: (gpus: GpuDevice[]) => request<GpuDevice[]>("/api/gpus", { method: "PUT", body: JSON.stringify(gpus) }),
   detectGpus: () => request<GpuDetectionResponse>("/api/gpus/detect"),

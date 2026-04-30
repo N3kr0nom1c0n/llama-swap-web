@@ -45,6 +45,7 @@ from .schemas import (
     StateResponse,
 )
 from .model_inventory import model_from_download, scan_model_files
+from .restart_service import LlamaSwapRestartError, get_llama_swap_status, restart_llama_swap
 from .settings import ManagerSettings, clear_hf_token, default_db_path, get_hf_token, save_hf_token
 
 UPLOAD_CHUNK_SIZE = 1024 * 1024
@@ -108,6 +109,17 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         except OSError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return db.get_settings().public_dict()
+
+    @app.get("/api/llama-swap/status")
+    def llama_swap_status() -> dict:
+        return get_llama_swap_status(db.get_settings())
+
+    @app.post("/api/llama-swap/restart")
+    def llama_swap_restart() -> dict:
+        try:
+            return restart_llama_swap(db.get_settings())
+        except LlamaSwapRestartError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/api/gpus", response_model=list[GpuDevice])
     def get_gpus() -> list[GpuDevice]:

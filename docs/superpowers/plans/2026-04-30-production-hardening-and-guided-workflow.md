@@ -13,7 +13,7 @@
 ## Operating Rules
 
 - [ ] Keep v1 LAN-only with no login/auth UI. Production hardening means secret safety, path safety, scoped CORS, non-root container, backups, and reliable QA gates.
-- [ ] Do not add Docker socket access or automatic llama-swap restarts in v1.
+- [ ] Do not add automatic llama-swap restarts during config apply. Docker socket access, if present, must be explicit operator opt-in for a manual restart button.
 - [ ] Generated llama-swap commands must use container paths like `/models/...`, never host paths.
 - [ ] Generated config must use llama-swap `matrix`; do not reintroduce legacy `groups`.
 - [ ] HF tokens must never be returned by API responses, rendered in the UI, logged, or committed.
@@ -471,7 +471,7 @@ Final manual/browser check:
 - [ ] Plan GPU placement.
 - [ ] Preview matrix config using `/models/...` paths.
 - [ ] Apply config and verify timestamped backup.
-- [ ] Confirm llama-swap restart remains manual in v1.
+- [ ] Confirm llama-swap restart remains a separate manual action in v1.
 
 ---
 

@@ -18,6 +18,10 @@ const settingsPayload = {
   max_parallel_downloads: 1,
   disk_safety_gb: 20,
   llama_server_cmd: "/app/llama-server",
+  llama_swap_restart_enabled: false,
+  llama_swap_container_name: "llama-swap",
+  docker_socket_path: "/var/run/docker.sock",
+  llama_swap_restart_timeout: 30,
   role_directories: {
     reasoning: "/models/reasoning",
     chat: "/models/chat",
@@ -89,6 +93,35 @@ describe("SettingsPage", () => {
 
     expect(await screen.findByLabelText(/Backup retention count/)).toHaveValue(0);
     expect(screen.getByLabelText(/Backup retention days/)).toHaveValue(0);
+  });
+
+  it("saves llama-swap restart controls as explicit opt-in settings", async () => {
+    let savedSettings: Record<string, unknown> | null = null;
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/settings") && !init?.method) return Promise.resolve(jsonResponse(settingsPayload));
+      if (url.endsWith("/api/settings") && init?.method === "PUT") {
+        savedSettings = JSON.parse(String(init.body));
+        return Promise.resolve(jsonResponse(savedSettings));
+      }
+      if (url.endsWith("/api/state")) return Promise.resolve(jsonResponse({}));
+      if (url.endsWith("/api/config/preview")) return Promise.resolve(jsonResponse({}));
+      return Promise.reject(new Error(`Unexpected fetch ${url}`));
+    });
+
+    renderWithProviders(<SettingsPage />);
+
+    fireEvent.click(await screen.findByLabelText("Enable llama-swap restart control"));
+    fireEvent.change(screen.getByLabelText("llama-swap container name"), { target: { value: "llama-swap" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Settings" }));
+
+    await waitFor(() => expect(savedSettings).not.toBeNull());
+    expect(savedSettings).toMatchObject({
+      llama_swap_restart_enabled: true,
+      llama_swap_container_name: "llama-swap",
+      docker_socket_path: "/var/run/docker.sock",
+      llama_swap_restart_timeout: 30,
+    });
   });
 });
 

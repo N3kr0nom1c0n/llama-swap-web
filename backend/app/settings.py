@@ -4,7 +4,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 HF_TOKEN_KEY = "HF_TOKEN"
@@ -66,8 +66,19 @@ class ManagerSettings(BaseModel):
     )
     disk_safety_gb: int = 20
     llama_server_cmd: str = "/app/llama-server"
+    llama_swap_restart_enabled: bool = False
+    llama_swap_container_name: str = "llama-swap"
+    docker_socket_path: str = "/var/run/docker.sock"
+    llama_swap_restart_timeout: int = Field(default=30, ge=1, le=300)
     role_directories: RoleDirectories = Field(default_factory=RoleDirectories)
     defaults: Defaults = Field(default_factory=Defaults)
+
+    @field_validator("docker_socket_path")
+    @classmethod
+    def docker_socket_path_must_be_absolute(cls, value: str) -> str:
+        if not Path(value).is_absolute():
+            raise ValueError("docker_socket_path must be absolute")
+        return value
 
     @property
     def hf_token_configured(self) -> bool:
@@ -106,6 +117,10 @@ def settings_from_env() -> ManagerSettings:
         ),
         disk_safety_gb=int(os.getenv("DISK_SAFETY_GB", "20")),
         llama_server_cmd=os.getenv("LLAMA_SERVER_CMD", "/app/llama-server"),
+        llama_swap_restart_enabled=_bool_env("LLAMA_SWAP_RESTART_ENABLED", False),
+        llama_swap_container_name=os.getenv("LLAMA_SWAP_CONTAINER_NAME", "llama-swap"),
+        docker_socket_path=os.getenv("DOCKER_SOCKET_PATH", "/var/run/docker.sock"),
+        llama_swap_restart_timeout=int(os.getenv("LLAMA_SWAP_RESTART_TIMEOUT", "30")),
     )
 
 
@@ -114,6 +129,13 @@ def _csv_env(name: str, default: list[str]) -> list[str]:
     if raw is None:
         return default
     return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def default_db_path(settings: ManagerSettings | None = None) -> Path:

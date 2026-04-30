@@ -39,11 +39,33 @@ export interface ManagerSettings {
   max_parallel_downloads: number;
   disk_safety_gb: number;
   llama_server_cmd: string;
+  llama_swap_restart_enabled: boolean;
+  llama_swap_container_name: string;
+  docker_socket_path: string;
+  llama_swap_restart_timeout: number;
   role_directories: RoleDirectories;
   defaults: Defaults;
   hf_token_configured?: boolean;
   hf_token?: string;
   hf_token_source?: string;
+}
+
+export interface LlamaSwapRuntimeStatus {
+  enabled: boolean;
+  available: boolean;
+  container_name: string;
+  socket_path: string;
+  container_id?: string;
+  status: string;
+  running: boolean;
+  error: string;
+  warning: string;
+}
+
+export interface LlamaSwapRestartResponse {
+  restarted: boolean;
+  message: string;
+  status: LlamaSwapRuntimeStatus;
 }
 
 export interface GpuDevice {

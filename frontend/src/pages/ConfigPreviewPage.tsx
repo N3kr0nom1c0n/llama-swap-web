@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, FileWarning, RefreshCw, RotateCcw } from "lucide-react";
+import { Check, FileWarning, Power, RefreshCw, RotateCcw, ShieldAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { CodeBlock } from "../components/CodeBlock";
@@ -13,6 +13,11 @@ export function ConfigPreviewPage() {
   const [confirmDestructive, setConfirmDestructive] = useState(false);
   const models = useQuery({ queryKey: queryKeys.models, queryFn: api.models });
   const backups = useQuery({ queryKey: queryKeys.configBackups, queryFn: api.configBackups });
+  const runtime = useQuery({
+    queryKey: queryKeys.llamaSwapStatus,
+    queryFn: api.llamaSwapStatus,
+    refetchInterval: 10000,
+  });
   const preview = useQuery({
     queryKey: [...queryKeys.preview, selectedIds],
     queryFn: () => api.previewConfig(selectedIds),
@@ -35,7 +40,15 @@ export function ConfigPreviewPage() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.configBackups });
     },
   });
+  const restart = useMutation({
+    mutationFn: api.restartLlamaSwap,
+    onSuccess: (data) => {
+      queryClient.setQueryData(queryKeys.llamaSwapStatus, data.status);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.llamaSwapStatus });
+    },
+  });
   const destructiveChanges = preview.data?.destructive_changes ?? [];
+  const runtimeStatus = runtime.data;
 
   useEffect(() => {
     setConfirmDestructive(false);
@@ -144,6 +157,39 @@ export function ConfigPreviewPage() {
 
       <section className="panel">
         <div className="panel-header">
+          <h2>llama-swap Runtime</h2>
+          <StatusPill tone={runtimeTone(runtimeStatus)}>
+            {runtime.isLoading ? "checking" : runtimeLabel(runtimeStatus)}
+          </StatusPill>
+        </div>
+        <div className="runtime-card">
+          <div>
+            <strong>{runtimeStatus?.container_name || "llama-swap"}</strong>
+            <span>{runtimeStatus?.enabled ? `Docker socket: ${runtimeStatus.socket_path}` : "Restart control is disabled in Settings."}</span>
+            {runtimeStatus?.status ? <small>Container status: {runtimeStatus.status}</small> : null}
+            {runtimeStatus?.error ? <small className="danger-text">{runtimeStatus.error}</small> : null}
+          </div>
+          <button
+            className="button danger"
+            type="button"
+            onClick={() => restart.mutate()}
+            disabled={!runtimeStatus?.enabled || !runtimeStatus.available || restart.isPending}
+          >
+            <Power size={16} aria-hidden="true" />
+            Restart llama-swap
+          </button>
+        </div>
+        <p className="field-hint">
+          <ShieldAlert size={14} aria-hidden="true" />
+          {runtimeStatus?.warning || "Docker socket access can control this host. Enable this only for the trusted manager container."}
+        </p>
+        {restart.data ? <p className="form-success">{restart.data.message}</p> : null}
+        {restart.error ? <p className="form-error">{restart.error.message}</p> : null}
+        {runtime.error ? <p className="form-error">{runtime.error.message}</p> : null}
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
           <h2>Backups</h2>
           <button className="button secondary" type="button" onClick={() => void backups.refetch()} disabled={backups.isFetching}>
             <RefreshCw size={16} aria-hidden="true" />
@@ -206,4 +252,16 @@ function formatBytes(size: number) {
 function formatDate(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function runtimeTone(status: { enabled?: boolean; available?: boolean; running?: boolean } | undefined) {
+  if (!status?.enabled) return "warn";
+  if (!status.available) return "bad";
+  return status.running ? "ok" : "warn";
+}
+
+function runtimeLabel(status: { enabled?: boolean; available?: boolean; running?: boolean; status?: string } | undefined) {
+  if (!status?.enabled) return "disabled";
+  if (!status.available) return "unavailable";
+  return status.status || (status.running ? "running" : "stopped");
 }

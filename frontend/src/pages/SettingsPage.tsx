@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { KeyRound, Save, Trash2 } from "lucide-react";
+import { KeyRound, Power, Save, ShieldAlert, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { Field } from "../components/Field";
@@ -95,6 +95,62 @@ export function SettingsPage() {
           </Field>
           <Field label="llama-server command">
             <input value={draft.llama_server_cmd} onChange={(event) => update({ llama_server_cmd: event.target.value })} />
+          </Field>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <h2>llama-swap Restart Control</h2>
+          <StatusPill tone={draft.llama_swap_restart_enabled ? "warn" : "idle"}>{draft.llama_swap_restart_enabled ? "enabled" : "disabled"}</StatusPill>
+        </div>
+        <div className="callout warn">
+          <div>
+            <strong>
+              <ShieldAlert size={16} aria-hidden="true" />
+              Docker socket access is powerful
+            </strong>
+            <p>
+              Enabling this lets the manager restart the configured llama-swap container through the mounted Docker socket. Keep this LAN-only and mount
+              only the real Docker socket you intend to use.
+            </p>
+          </div>
+        </div>
+        <div className="form-grid">
+          <div className="field">
+            <span className="field-label">Restart opt-in</span>
+            <label className="check-chip">
+              <input
+                type="checkbox"
+                checked={draft.llama_swap_restart_enabled}
+                onChange={(event) => update({ llama_swap_restart_enabled: event.target.checked })}
+              />
+              Enable llama-swap restart control
+            </label>
+          </div>
+          <Field label="llama-swap container name">
+            <input
+              value={draft.llama_swap_container_name}
+              onChange={(event) => update({ llama_swap_container_name: event.target.value })}
+            />
+          </Field>
+          <Field label="Docker socket path">
+            <input value={draft.docker_socket_path} onChange={(event) => update({ docker_socket_path: event.target.value })} />
+          </Field>
+          <Field label="Restart timeout seconds">
+            <input
+              type="number"
+              min={1}
+              max={300}
+              value={draft.llama_swap_restart_timeout}
+              onChange={(event) => update({ llama_swap_restart_timeout: Number(event.target.value) })}
+            />
+          </Field>
+          <Field label="Manual action">
+            <div className="static-field">
+              <Power size={16} aria-hidden="true" />
+              Restart button appears on Config Preview after this is enabled and the socket is reachable.
+            </div>
           </Field>
         </div>
       </section>

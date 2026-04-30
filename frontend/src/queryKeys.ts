@@ -1,6 +1,7 @@
 export const queryKeys = {
   state: ["state"] as const,
   settings: ["settings"] as const,
+  llamaSwapStatus: ["llama-swap", "status"] as const,
   gpus: ["gpus"] as const,
   gpuDetection: ["gpus", "detect"] as const,
   gpuStatus: ["gpus", "status"] as const,

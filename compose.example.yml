@@ -9,12 +9,20 @@ services:
         required: false
     ports:
       - "8081:8081"
+    # Required if the optional Docker socket mount is enabled while the
+    # manager runs as UID/GID 10001. Set DOCKER_SOCKET_GID in .env with:
+    #   stat -c '%g' /var/run/docker.sock
+    # group_add:
+    #   - "${DOCKER_SOCKET_GID:?Set DOCKER_SOCKET_GID to the Docker socket group id}"
     volumes:
       - ./.env:/app/.env
       - /path/to/llama.cpp/models:/models
       - /path/to/llama-swap/config.yaml:/app/config.yaml
       - /path/to/llama-swap/backups:/backups
       - llama-swap-manager-data:/data
+      # Optional: only mount this when LLAMA_SWAP_RESTART_ENABLED=true.
+      # It lets the manager restart the configured llama-swap container.
+      # - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
   llama-swap-manager-data:

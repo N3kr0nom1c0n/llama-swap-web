@@ -20,9 +20,9 @@ Apply does this:
 2. Verifies the staged preview is fresh.
 3. Creates a timestamped backup in `/backups`.
 4. Writes the new config atomically when possible.
-5. Returns a manual restart note.
+5. Returns a restart-required note.
 
-The manager does not restart llama-swap in v1.
+The manager does not restart llama-swap automatically as part of apply. If optional restart controls are enabled, the `llama-swap Runtime` panel can inspect the configured container and expose a manual restart button.
 
 ## Backup List
 
@@ -35,6 +35,6 @@ Restore does this:
 1. Validates the requested backup name is safe.
 2. Creates a backup of the current config first.
 3. Replaces the active config with the selected backup.
-4. Returns a manual restart note.
+4. Returns a restart-required note.
 
 Use restore when a generated config prevents llama-swap from loading the intended models.

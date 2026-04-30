@@ -4,7 +4,7 @@
 
 **Goal:** Finish `llama-swap-web` as a production-ready LAN application that removes the manual llama-swap/llama.cpp pain points: discover or download models, install them into safe per-model folders, create managed llama-swap entries, plan GPU placement, generate and validate matrix config, apply with recovery, and document the full operating model.
 
-**Architecture:** Keep the current single-container FastAPI plus React/Vite architecture with SQLite state under `/data`. Finish the product by adding bounded services around downloads, model inventory, config ownership, GPU recommendations, audit logging, docs, and release QA. Do not add Docker socket access, automatic llama-swap restart, legacy `groups`, or mandatory login in v1.
+**Architecture:** Keep the current single-container FastAPI plus React/Vite architecture with SQLite state under `/data`. Finish the product by adding bounded services around downloads, model inventory, config ownership, GPU recommendations, audit logging, docs, and release QA. Keep restart controls explicit and optional: no automatic llama-swap restart during config apply, no Docker socket mount unless the operator opts in, no legacy `groups`, and no mandatory login in v1.
 
 **Tech Stack:** FastAPI, SQLite, Pydantic, ruamel.yaml, huggingface_hub, React, Vite, TypeScript, TanStack Query, Vitest, Testing Library, Playwright, Docker, GitHub Actions, GHCR.
 
@@ -49,8 +49,8 @@ Remaining release checklist partials:
 
 ## Non-Negotiable Constraints
 
-- No Docker socket mount.
-- No automatic llama-swap restart in v1.
+- No Docker socket mount by default. Optional manual restart controls require explicit opt-in and a documented socket mount.
+- No automatic llama-swap restart during config apply.
 - No required login or auth wall in v1. LAN and reverse-proxy-auth guidance is documentation only unless the user explicitly changes scope.
 - No `groups` output in generated llama-swap config.
 - No generated host paths in llama-swap commands.

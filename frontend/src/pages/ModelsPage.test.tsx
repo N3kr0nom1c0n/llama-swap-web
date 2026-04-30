@@ -19,6 +19,10 @@ const settingsPayload: ManagerSettings = {
   max_parallel_downloads: 1,
   disk_safety_gb: 20,
   llama_server_cmd: "/app/llama-server",
+  llama_swap_restart_enabled: false,
+  llama_swap_container_name: "llama-swap",
+  docker_socket_path: "/var/run/docker.sock",
+  llama_swap_restart_timeout: 30,
   role_directories: {
     reasoning: "/models/reasoning",
     chat: "/models/chat",

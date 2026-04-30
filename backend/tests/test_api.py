@@ -85,6 +85,63 @@ def test_hf_token_save_preserves_existing_non_token_env_lines(tmp_path: Path, mo
     assert env_file.read_text(encoding="utf-8") == "OTHER=value\nHF_TOKEN=hf_new_secret\nNO_NEWLINE=kept"
 
 
+def test_llama_swap_restart_is_disabled_by_default(tmp_path: Path) -> None:
+    app = create_app(tmp_path / "manager.db")
+    client = TestClient(app)
+
+    status = client.get("/api/llama-swap/status")
+    restart = client.post("/api/llama-swap/restart")
+
+    assert status.status_code == 200
+    assert status.json()["enabled"] is False
+    assert status.json()["available"] is False
+    assert status.json()["container_name"] == "llama-swap"
+    assert restart.status_code == 409
+    assert "disabled" in restart.json()["detail"]
+
+
+def test_llama_swap_restart_uses_configured_docker_socket(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LLAMA_SWAP_RESTART_ENABLED", "true")
+    monkeypatch.setenv("LLAMA_SWAP_CONTAINER_NAME", "llama-swap")
+    monkeypatch.setenv("DOCKER_SOCKET_PATH", str(tmp_path / "docker.sock"))
+    calls: list[tuple[str, str, int]] = []
+
+    def fake_status(settings):
+        return {
+            "enabled": settings.llama_swap_restart_enabled,
+            "available": True,
+            "container_name": settings.llama_swap_container_name,
+            "socket_path": settings.docker_socket_path,
+            "status": "running",
+            "running": True,
+            "error": "",
+            "warning": "Docker socket access can control this host.",
+        }
+
+    def fake_restart(settings):
+        calls.append((settings.docker_socket_path, settings.llama_swap_container_name, settings.llama_swap_restart_timeout))
+        return {
+            "restarted": True,
+            "message": "Restarted llama-swap.",
+            "status": fake_status(settings),
+        }
+
+    monkeypatch.setattr("app.main.get_llama_swap_status", fake_status)
+    monkeypatch.setattr("app.main.restart_llama_swap", fake_restart)
+    app = create_app(tmp_path / "manager.db")
+    client = TestClient(app)
+
+    status = client.get("/api/llama-swap/status")
+    restarted = client.post("/api/llama-swap/restart")
+
+    assert status.status_code == 200
+    assert status.json()["enabled"] is True
+    assert restarted.status_code == 200
+    assert restarted.json()["restarted"] is True
+    assert restarted.json()["status"]["running"] is True
+    assert calls == [(str(tmp_path / "docker.sock"), "llama-swap", 30)]
+
+
 def test_hf_token_write_preserves_env_file_when_replace_fails(tmp_path: Path, monkeypatch) -> None:
     env_file = tmp_path / ".env"
     original = "OTHER=value\nHF_TOKEN=hf_existing_secret\nTRAILING=kept\n"

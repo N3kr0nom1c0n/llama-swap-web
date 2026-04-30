@@ -169,7 +169,7 @@ Every phase follows the same loop:
 
 1. Planning Agent writes a packet with owner, files, tests, and acceptance criteria.
 2. Coding Agent implements only its packet.
-3. Spec Reviewer rejects changes that add login requirements, Docker socket access, automatic llama-swap restart, legacy `groups`, host paths in generated commands, token exposure, or unsafe config applies.
+3. Spec Reviewer rejects changes that add login requirements, automatic llama-swap restart during config apply, implicit Docker socket access, legacy `groups`, host paths in generated commands, token exposure, or unsafe config applies.
 4. Code Reviewer checks maintainability, path safety, token redaction, async/job behavior, UI correctness, and test quality.
 5. QA Agent runs narrow tests first, then the full phase gate.
 6. On failure, QA writes this report:

@@ -14,4 +14,4 @@ Start here:
 - [Troubleshooting](troubleshooting.md): common failure modes and what to check first.
 - [Release QA](release-qa.md): commands and proof required before calling a build production-ready.
 
-Version 1 is intentionally LAN-focused: no built-in login, no Docker socket mount, and no automatic llama-swap restart. Use a trusted LAN or a reverse proxy with auth if you expose it more broadly.
+Version 1 is intentionally LAN-focused: no built-in login and no automatic llama-swap restart during config apply. Optional manual restart controls require an explicit Docker socket mount and should only be enabled on a trusted LAN or behind your own auth layer.

@@ -223,6 +223,12 @@ main {
   color: var(--text);
 }
 
+.button.danger {
+  border-color: rgba(255, 119, 119, 0.42);
+  background: rgba(255, 119, 119, 0.1);
+  color: var(--bad);
+}
+
 .icon-button {
   width: 36px;
   padding: 0;
@@ -304,6 +310,18 @@ main {
   color: var(--muted);
 }
 
+.callout.warn {
+  border-color: rgba(241, 201, 107, 0.36);
+  background: rgba(241, 201, 107, 0.06);
+}
+
+.callout strong,
+.static-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .callout ul {
   margin: 8px 0 0;
   padding-left: 18px;
@@ -334,6 +352,34 @@ main {
 .inventory-card ul {
   margin: 8px 0 0;
   padding-left: 18px;
+}
+
+.runtime-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.runtime-card strong,
+.runtime-card span,
+.runtime-card small {
+  display: block;
+}
+
+.runtime-card span,
+.runtime-card small,
+.static-field {
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.danger-text {
+  color: var(--bad) !important;
 }
 
 .action-list {

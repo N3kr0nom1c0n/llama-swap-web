@@ -18,6 +18,7 @@ This backlog is still the source of truth for remaining v1 work. The superseding
 - B8/B9/B10/B11/B13: HF token handling uses schemas and atomic env-file writes without process-wide mutation; download runtime state can be cleaned up; `max_parallel_downloads` changes apply at runtime.
 - F1/F2/F3: Managed Models command preview includes `--n-gpu-layers`, textarea list editing preserves in-progress input, and numeric llama flags are normalized before save.
 - Config backup restore: Config Preview now lists backups and can restore a selected backup through the API/UI while first backing up the current config.
+- Optional llama-swap restart controls: Settings now has explicit Docker socket opt-in fields, Config Preview shows runtime status, and restart is a separate manual button.
 - Documentation: README, in-app Help, and `docs/wiki/` now cover production Docker, native setup, settings, model workflows, GPU planning, config preview/apply/restore, troubleshooting, and release QA.
 
 ### Completed In Visible Workflow Recovery Pass

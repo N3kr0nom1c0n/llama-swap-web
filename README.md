@@ -2,7 +2,7 @@
 
 LAN web app for importing Hugging Face GGUF models onto an AI rig, staging llama-swap model entries, and generating `config.yaml` changes before you apply them.
 
-The app is intentionally local/LAN focused. Version 1 has no login, does not mount the Docker socket, and does not restart llama-swap automatically. It downloads and writes models through the manager container, stores app state in SQLite, and keeps Hugging Face tokens out of API responses.
+The app is intentionally local/LAN focused. Version 1 has no login and does not restart llama-swap automatically after config apply. Optional manual restart controls can be enabled if you explicitly mount the Docker socket into the manager container. It downloads and writes models through the manager container, stores app state in SQLite, and keeps Hugging Face tokens out of API responses.
 
 ## What It Does
 
@@ -16,6 +16,7 @@ The app is intentionally local/LAN focused. Version 1 has no login, does not mou
 - Generate a llama-swap `matrix` config preview with a unified diff.
 - Validate staged YAML, create a timestamped backup, and apply the config only after approval.
 - List and restore config backups from the UI when a generated config needs rollback.
+- Optionally restart the configured llama-swap container from Config Preview after you enable Docker socket access in Settings.
 - Provide a built-in Help page that explains every app area and the important model settings.
 
 ## Recommended Docker Install
@@ -64,6 +65,32 @@ Docker Compose is the recommended deployment path. It keeps the app self-contain
    ```
 
    The manager command generator should use container paths such as `/models/chat/...`, not host paths. That is why the model root is mounted at `/models`. Runtime temp files and Hugging Face cache data live under `/data/tmp` and `/data/hf-cache` in the named data volume; do not bind-mount host `/tmp` into the container.
+
+   Optional restart controls require one extra bind mount and explicit settings:
+
+   ```yaml
+   group_add:
+     - "${DOCKER_SOCKET_GID:?Set DOCKER_SOCKET_GID to the Docker socket group id}"
+   volumes:
+     - /var/run/docker.sock:/var/run/docker.sock
+   ```
+
+   On Linux, set `DOCKER_SOCKET_GID` in `.env` to the group id that owns the socket:
+
+   ```sh
+   printf 'DOCKER_SOCKET_GID=%s\n' "$(stat -c '%g' /var/run/docker.sock)" >> .env
+   ```
+
+   Then set these app values. `.env` seeds startup defaults only when the manager database is first initialized; after that, Settings is the source of truth for persisted manager settings.
+
+   ```dotenv
+   LLAMA_SWAP_RESTART_ENABLED=true
+   LLAMA_SWAP_CONTAINER_NAME=llama-swap
+   DOCKER_SOCKET_PATH=/var/run/docker.sock
+   LLAMA_SWAP_RESTART_TIMEOUT=30
+   ```
+
+   Mounting the Docker socket grants host-level Docker control to this container. Keep the manager LAN-only and enable this only on a trusted rig.
 
 5. Start the manager:
 
@@ -214,6 +241,11 @@ The Vite dev server proxies `/api` to `http://127.0.0.1:8081`.
 | `ALLOWED_UPLOAD_EXTENSIONS` | `.gguf,.safetensors,.json,.jinja,.jinja2,.model,.tiktoken` | Comma-separated upload allowlist. Keep this narrow to model and companion file types. |
 | `DISK_SAFETY_GB` | `20` | Reserved free-space safety margin. |
 | `LLAMA_SERVER_CMD` | `/app/llama-server` | Command path used in generated model entries. |
+| `LLAMA_SWAP_RESTART_ENABLED` | `false` | Enables the manual restart button and Docker socket status check. |
+| `LLAMA_SWAP_CONTAINER_NAME` | `llama-swap` | Container name the manager restarts when restart controls are enabled. |
+| `DOCKER_SOCKET_PATH` | `/var/run/docker.sock` | Docker Unix socket path inside the manager container. |
+| `LLAMA_SWAP_RESTART_TIMEOUT` | `30` | Docker restart timeout in seconds. |
+| `DOCKER_SOCKET_GID` | empty | Compose interpolation helper for `group_add` when mounting `/var/run/docker.sock` into the non-root manager container. Not read by the app. |
 | `CORS_ALLOWED_ORIGINS` | empty | Comma-separated dev origins allowed to call the API from a browser. Keep empty for recommended Docker/LAN same-origin use. For Vite dev, use `http://localhost:5173,http://127.0.0.1:5173`. |
 | `HF_TOKEN` | empty | Optional Hugging Face token for gated/private downloads. |
 
@@ -222,19 +254,21 @@ The Vite dev server proxies `/api` to `http://127.0.0.1:8081`.
 - Do not commit `.env`, `compose.yml`, model files, SQLite databases, backups, logs, or tokens. The included `.gitignore` excludes those by default.
 - `HF_TOKEN` is read from the environment or `.env`; API responses only show whether a token is configured.
 - The app is designed for a trusted LAN in v1. Put it behind your own auth layer if it is reachable outside your LAN.
-- The manager does not need Docker socket access.
+- The manager does not need Docker socket access unless you enable manual restart controls. A mounted Docker socket is powerful because it can control containers on the host.
 - The Docker image runs as UID/GID `10001:10001`. Keep bind mounts writable by that ID instead of running the container as root.
 - Do not mount host `/tmp` into the manager container. Use `/data/tmp` for download staging and `/data/hf-cache` for Hugging Face cache data.
 
 ## Restarting llama-swap
 
-When the manager applies a generated `config.yaml`, it writes a backup first and reports that a restart is required. Restart llama-swap manually after reviewing the generated config:
+When the manager applies a generated `config.yaml`, it writes a backup first and reports that a restart is required. By default, restart llama-swap manually after reviewing the generated config:
 
 ```sh
 docker compose restart llama-swap
 ```
 
-Run that in the Compose project that actually owns your llama-swap container. The manager intentionally does not restart llama-swap in v1.
+Run that in the Compose project that actually owns your llama-swap container. The manager intentionally does not restart llama-swap automatically as part of config apply.
+
+If optional restart controls are enabled, Config Preview shows a `llama-swap Runtime` panel. It checks the configured Docker socket and container, then exposes a manual `Restart llama-swap` button. The button is disabled when the socket is missing, the configured container is not reachable, or restart controls are disabled in Settings.
 
 ## Backup And Restore
 
