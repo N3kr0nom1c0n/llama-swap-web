@@ -10,8 +10,10 @@ from app.config_service import (
     backup_and_apply_config,
     build_llama_command,
     detect_destructive_changes,
+    list_config_backups,
     manager_to_llama_path,
     preview_config,
+    restore_config_backup,
     safe_join,
 )
 from app.schemas import ManagedModel
@@ -656,3 +658,110 @@ def test_backup_and_apply_prunes_backups_by_count_and_age(tmp_path: Path) -> Non
     assert recent.name in config_backups
     assert not old.exists()
     assert unrelated.exists()
+
+
+def test_list_config_backups_returns_safe_config_backups_newest_first(tmp_path: Path) -> None:
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    older = backups / "config-20260430-010000-000000.yaml"
+    newer = backups / "config-20260430-020000-000000.yaml"
+    initial = backups / "config-initial-20260430-000000-000000.yaml"
+    unrelated = backups / "notes.yaml"
+    directory = backups / "config-dir.yaml"
+    older.write_text("older", encoding="utf-8")
+    newer.write_text("newer", encoding="utf-8")
+    initial.write_text("", encoding="utf-8")
+    unrelated.write_text("notes", encoding="utf-8")
+    directory.mkdir()
+    os.utime(older, (100, 100))
+    os.utime(newer, (200, 200))
+    os.utime(initial, (50, 50))
+
+    result = list_config_backups(str(backups))
+
+    assert [item.name for item in result] == [newer.name, older.name, initial.name]
+    assert result[0].path == str(newer)
+    assert result[0].size == len("newer")
+    assert result[0].modified.timestamp() == 200
+
+
+def test_restore_config_backup_backs_up_current_config_and_restores_selected_backup(tmp_path: Path) -> None:
+    config = tmp_path / "config.yaml"
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    config.write_text("models:\n  current: {}\n", encoding="utf-8")
+    selected = backups / "config-20260430-010000-000000.yaml"
+    selected.write_text("models:\n  restored: {}\n", encoding="utf-8")
+
+    current_backup = restore_config_backup(str(config), str(backups), selected.name)
+
+    assert current_backup.exists()
+    assert current_backup.name.startswith("config-")
+    assert current_backup.name != selected.name
+    assert current_backup.read_text(encoding="utf-8") == "models:\n  current: {}\n"
+    assert config.read_text(encoding="utf-8") == "models:\n  restored: {}\n"
+
+
+@pytest.mark.parametrize(
+    ("backup_name", "match"),
+    [
+        ("../config-escape.yaml", "backup name must be a file name"),
+        ("/tmp/config.yaml", "backup name must be a file name"),
+        ("missing.yaml", "backup does not exist"),
+    ],
+)
+def test_restore_config_backup_rejects_unsafe_or_missing_names(
+    tmp_path: Path,
+    backup_name: str,
+    match: str,
+) -> None:
+    config = tmp_path / "config.yaml"
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    config.write_text("models: {}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=match):
+        restore_config_backup(str(config), str(backups), backup_name)
+
+
+def test_restore_config_backup_rejects_directory_backup(tmp_path: Path) -> None:
+    config = tmp_path / "config.yaml"
+    backups = tmp_path / "backups"
+    selected = backups / "config-20260430-010000-000000.yaml"
+    selected.mkdir(parents=True)
+    config.write_text("models: {}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="backup is not a file"):
+        restore_config_backup(str(config), str(backups), selected.name)
+
+
+def test_restore_config_backup_rejects_symlink_escape(tmp_path: Path) -> None:
+    config = tmp_path / "config.yaml"
+    backups = tmp_path / "backups"
+    outside = tmp_path / "outside.yaml"
+    backups.mkdir()
+    config.write_text("models: {}\n", encoding="utf-8")
+    outside.write_text("models:\n  outside: {}\n", encoding="utf-8")
+    selected = backups / "config-20260430-010000-000000.yaml"
+    selected.symlink_to(outside)
+
+    with pytest.raises(ValueError, match="backup escapes backup directory"):
+        restore_config_backup(str(config), str(backups), selected.name)
+
+
+def test_restore_config_backup_preserves_config_symlink(tmp_path: Path) -> None:
+    real_config = tmp_path / "actual" / "config.yaml"
+    real_config.parent.mkdir()
+    real_config.write_text("models:\n  current: {}\n", encoding="utf-8")
+    link_config = tmp_path / "config.yaml"
+    link_config.symlink_to(real_config)
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    selected = backups / "config-20260430-010000-000000.yaml"
+    selected.write_text("models:\n  restored: {}\n", encoding="utf-8")
+
+    backup = restore_config_backup(str(link_config), str(backups), selected.name)
+
+    assert link_config.is_symlink()
+    assert backup.read_text(encoding="utf-8") == "models:\n  current: {}\n"
+    assert real_config.read_text(encoding="utf-8") == "models:\n  restored: {}\n"

@@ -59,10 +59,24 @@ curl -fsS -X POST "${BASE_URL}/api/config/apply" \
   -d "{\"stage_id\":\"${stage_id}\",\"confirm_destructive\":false}" \
   > "${QA_ARTIFACT_DIR}/config-apply.json"
 
+curl -fsS "${BASE_URL}/api/config/backups" > "${QA_ARTIFACT_DIR}/config-backups.json"
+
 if [ -n "${SMOKE_BACKUPS_DIR}" ]; then
   find "${SMOKE_BACKUPS_DIR}" -maxdepth 1 -type f -name 'config*.yaml' -print | sort > "${QA_ARTIFACT_DIR}/backup-list.txt"
   test -s "${QA_ARTIFACT_DIR}/backup-list.txt"
 fi
+
+python3 - "${QA_ARTIFACT_DIR}/config-backups.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+backups = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if not backups:
+    raise SystemExit("backup API returned no config backups after apply")
+if not all(item.get("name", "").startswith("config") for item in backups):
+    raise SystemExit("backup API returned a non-config backup entry")
+PY
 
 if [ -n "${SMOKE_CONTAINER}" ] && command -v docker >/dev/null 2>&1; then
   docker exec "${SMOKE_CONTAINER}" id -u > "${QA_ARTIFACT_DIR}/container-uid.txt"

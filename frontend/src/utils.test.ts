@@ -18,12 +18,14 @@ describe("modelCommand", () => {
         flash_attn: "on",
         jinja: true,
         no_mmap: true,
+        n_gpu_layers: 999,
       },
     };
 
     expect(modelCommand(model, undefined)).toContain("--port ${PORT}");
     expect(modelCommand(model, undefined)).toContain("-m /models/chat/tiny.gguf");
     expect(modelCommand(model, undefined)).toContain("--tensor-split 24,24");
+    expect(modelCommand(model, undefined)).toContain("--n-gpu-layers 999");
     expect(modelCommand(model, undefined)).toContain("--mmproj /models/chat/mmproj.gguf");
   });
 

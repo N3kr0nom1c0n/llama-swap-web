@@ -17,7 +17,7 @@ from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 from ruamel.yaml.scalarstring import LiteralScalarString
 
-from .schemas import ConfigPreviewResponse, DestructiveChange, ManagedModel
+from .schemas import ConfigBackupMetadata, ConfigPreviewResponse, DestructiveChange, ManagedModel
 from .settings import ManagerSettings
 
 
@@ -26,6 +26,7 @@ MATRIX_REF_TOKEN = re.compile(r"\+?([A-Za-z][A-Za-z0-9_]{0,7})")
 RAW_COMMAND_PATH_FLAGS = {"-m", "--model", "--mmproj", "--chat-template-file"}
 RAW_COMMAND_NON_PATH_FLAGS = {"--port"}
 DESTRUCTIVE_GLOBAL_KEYS = ("healthCheckTimeout", "logLevel", "sendLoadingState", "includeAliasesInList")
+CONFIG_BACKUP_NAME = re.compile(r"^config(?:-initial)?-\d{8}-\d{6}-\d{6}(?:-\d+)?\.yaml$")
 
 
 def safe_join(root: str | Path, *parts: str) -> Path:
@@ -568,6 +569,59 @@ def _unique_backup_path(backup_root: Path, prefix: str) -> Path:
     return candidate
 
 
+def _is_config_backup_name(name: str) -> bool:
+    return bool(CONFIG_BACKUP_NAME.fullmatch(name))
+
+
+def _safe_backup_file(backups_dir: str | Path, backup_name: str) -> Path:
+    name_path = Path(backup_name)
+    if name_path.is_absolute() or name_path.name != backup_name:
+        raise ValueError("backup name must be a file name")
+    backup_root = Path(backups_dir).resolve()
+    candidate = backup_root / backup_name
+    if not candidate.exists():
+        raise ValueError(f"backup does not exist: {backup_name}")
+    if not _is_config_backup_name(backup_name):
+        raise ValueError(f"backup is not a config backup: {backup_name}")
+    resolved = candidate.resolve()
+    if resolved != backup_root and backup_root not in resolved.parents:
+        raise ValueError("backup escapes backup directory")
+    if not candidate.is_file():
+        raise ValueError(f"backup is not a file: {backup_name}")
+    return candidate
+
+
+def list_config_backups(backups_dir: str) -> list[ConfigBackupMetadata]:
+    backup_root = Path(backups_dir)
+    if not backup_root.exists():
+        return []
+    if not backup_root.is_dir():
+        raise ValueError(f"backup directory is not a directory: {backups_dir}")
+    root_resolved = backup_root.resolve()
+    backups: list[ConfigBackupMetadata] = []
+    for candidate in backup_root.glob("config*.yaml"):
+        if not _is_config_backup_name(candidate.name):
+            continue
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        if resolved != root_resolved and root_resolved not in resolved.parents:
+            continue
+        if not candidate.is_file():
+            continue
+        stat = candidate.stat()
+        backups.append(
+            ConfigBackupMetadata(
+                name=candidate.name,
+                path=str(candidate),
+                size=stat.st_size,
+                modified=datetime.fromtimestamp(stat.st_mtime),
+            )
+        )
+    return sorted(backups, key=lambda backup: backup.modified, reverse=True)
+
+
 def _overwrite_config_in_place(source: Path, target: Path) -> None:
     with source.open("rb") as input_file, target.open("wb") as output_file:
         shutil.copyfileobj(input_file, output_file)
@@ -619,6 +673,12 @@ def backup_and_apply_config(
         if temp_path and temp_path.exists():
             temp_path.unlink()
     return backup
+
+
+def restore_config_backup(config_path: str, backups_dir: str, backup_name: str) -> Path:
+    backup = _safe_backup_file(backups_dir, backup_name)
+    rendered_yaml = backup.read_text(encoding="utf-8")
+    return backup_and_apply_config(config_path, backups_dir, rendered_yaml)
 
 
 def _matrix_expression_refs_removed_key(expression: Any, removed_keys: set[str]) -> bool:

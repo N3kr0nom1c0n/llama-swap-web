@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, FileWarning, RefreshCw } from "lucide-react";
+import { Check, FileWarning, RefreshCw, RotateCcw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { CodeBlock } from "../components/CodeBlock";
@@ -12,6 +12,7 @@ export function ConfigPreviewPage() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [confirmDestructive, setConfirmDestructive] = useState(false);
   const models = useQuery({ queryKey: queryKeys.models, queryFn: api.models });
+  const backups = useQuery({ queryKey: queryKeys.configBackups, queryFn: api.configBackups });
   const preview = useQuery({
     queryKey: [...queryKeys.preview, selectedIds],
     queryFn: () => api.previewConfig(selectedIds),
@@ -24,6 +25,14 @@ export function ConfigPreviewPage() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.state });
       void queryClient.invalidateQueries({ queryKey: queryKeys.preview });
+    },
+  });
+  const restore = useMutation({
+    mutationFn: api.restoreConfig,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.state });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.preview });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.configBackups });
     },
   });
   const destructiveChanges = preview.data?.destructive_changes ?? [];
@@ -133,6 +142,36 @@ export function ConfigPreviewPage() {
         <CodeBlock label="Diff" value={preview.data?.diff ?? ""} minRows={22} />
       </section>
 
+      <section className="panel">
+        <div className="panel-header">
+          <h2>Backups</h2>
+          <button className="button secondary" type="button" onClick={() => void backups.refetch()} disabled={backups.isFetching}>
+            <RefreshCw size={16} aria-hidden="true" />
+            Refresh
+          </button>
+        </div>
+        <div className="row-list">
+          {backups.data?.map((backup) => (
+            <div className="inventory-card" key={backup.name}>
+              <div>
+                <strong>{backup.name}</strong>
+                <span>
+                  {formatBytes(backup.size)} · {formatDate(backup.modified)}
+                </span>
+                <small>{backup.path}</small>
+              </div>
+              <button className="button secondary" type="button" onClick={() => restore.mutate(backup.name)} disabled={restore.isPending}>
+                <RotateCcw size={16} aria-hidden="true" />
+                Restore {backup.name}
+              </button>
+            </div>
+          ))}
+          {!backups.data?.length ? <span className="muted">No config backups found yet. Applying or restoring config creates backups here.</span> : null}
+        </div>
+        {backups.error ? <p className="form-error">{backups.error.message}</p> : null}
+        {restore.error ? <p className="form-error">{restore.error.message}</p> : null}
+      </section>
+
       {apply.data ? (
         <section className="alert-panel ok">
           <Check size={18} aria-hidden="true" />
@@ -143,7 +182,28 @@ export function ConfigPreviewPage() {
           </div>
         </section>
       ) : null}
+      {restore.data ? (
+        <section className="alert-panel ok">
+          <RotateCcw size={18} aria-hidden="true" />
+          <div>
+            <strong>Config restored from backup</strong>
+            <p>{restore.data.current_backup}</p>
+            <code>{restore.data.restart_note}</code>
+          </div>
+        </section>
+      ) : null}
       {apply.error ? <p className="form-error">{apply.error.message}</p> : null}
     </div>
   );
+}
+
+function formatBytes(size: number) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KiB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+function formatDate(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }

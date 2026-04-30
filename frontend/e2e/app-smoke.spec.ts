@@ -65,7 +65,7 @@ test("config preview regenerates with seeded API data", async ({ page, request }
 
   await page.goto("/config");
   await expect(page.getByRole("heading", { name: /config preview/i })).toBeVisible();
-  await expect(page.getByText(modelId)).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: new RegExp(escapeRegExp(modelId)) })).toBeVisible();
 
   await page.getByRole("button", { name: /regenerate/i }).click();
 
@@ -143,4 +143,8 @@ async function seedModel(request: APIRequestContext, id: string) {
   });
 
   expect(response).toBeOK();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

@@ -16,8 +16,10 @@ from ruamel.yaml import YAML
 from .config_service import (
     backup_and_apply_config,
     detect_destructive_changes,
+    list_config_backups,
     manager_to_llama_path,
     preview_config,
+    restore_config_backup,
     safe_join,
 )
 from .config_import import import_candidates_from_config
@@ -27,6 +29,7 @@ from .gpu_service import detect_gpus, gpu_status, recommend_tensor_split, valida
 from .hf_service import resolve_hf_url
 from .schemas import (
     ConfigApplyRequest,
+    ConfigRestoreRequest,
     ConfigImportRequest,
     ConfigPreviewRequest,
     CreateModelFromDownloadRequest,
@@ -85,7 +88,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     @app.put("/api/settings")
     def put_settings(settings: ManagerSettings) -> dict:
         saved = db.save_settings(settings)
-        app.state.download_manager.settings = saved
+        app.state.download_manager.update_settings(saved)
         return saved.public_dict()
 
     @app.put("/api/settings/hf-token")
@@ -212,6 +215,10 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="download job not found") from exc
 
+    @app.delete("/api/downloads/terminal")
+    def cleanup_terminal_downloads() -> dict:
+        return {"removed": app.state.download_manager.cleanup_terminal_jobs()}
+
     @app.get("/api/models")
     def list_models() -> list[dict]:
         return [model.model_dump(mode="json") for model in db.list_models()]
@@ -288,6 +295,32 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             "backup": str(backup),
             "restart_required": True,
             "restart_note": "Config applied. Restart llama-swap manually: docker compose restart llama-swap",
+        }
+
+    @app.get("/api/config/backups")
+    def config_backups() -> list[dict]:
+        try:
+            return [backup.model_dump(mode="json") for backup in list_config_backups(db.get_settings().backups_dir)]
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/config/restore")
+    def config_restore(payload: ConfigRestoreRequest) -> dict:
+        settings = db.get_settings()
+        try:
+            current_backup = restore_config_backup(
+                settings.llama_swap_config_path,
+                settings.backups_dir,
+                payload.backup_name,
+            )
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "restored": True,
+            "source_backup": payload.backup_name,
+            "current_backup": str(current_backup),
+            "restart_required": True,
+            "restart_note": "Config restored. Restart llama-swap manually: docker compose restart llama-swap",
         }
 
     @app.get("/api/config/import-candidates")

@@ -166,6 +166,17 @@ class ConfigApplyRequest(BaseModel):
     confirm_destructive: bool = False
 
 
+class ConfigBackupMetadata(BaseModel):
+    name: str
+    path: str
+    size: int
+    modified: datetime
+
+
+class ConfigRestoreRequest(BaseModel):
+    backup_name: str
+
+
 class ConfigImportCandidate(BaseModel):
     id: str
     model: ManagedModel

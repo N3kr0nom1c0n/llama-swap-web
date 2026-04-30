@@ -24,6 +24,7 @@ export function modelCommand(model: ManagedModel, settings: ManagerSettings | un
   addFlag(parts, "--cache-type-v", flags.cache_type_v);
   addFlag(parts, "--tensor-split", model.tensor_split);
   addFlag(parts, "--main-gpu", model.main_gpu);
+  addFlag(parts, "--n-gpu-layers", flags.n_gpu_layers);
   addFlag(parts, "--flash-attn", flags.flash_attn);
   addFlag(parts, "--mmproj", model.mmproj_file);
   addFlag(parts, "--chat-template-file", model.chat_template_file);

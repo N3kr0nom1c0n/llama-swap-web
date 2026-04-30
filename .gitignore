@@ -37,6 +37,7 @@ coverage/
 .vite/
 artifacts/qa/*
 !artifacts/qa/README.md
+!artifacts/qa/*.md
 artifacts/qa/playwright/
 
 # Runtime state

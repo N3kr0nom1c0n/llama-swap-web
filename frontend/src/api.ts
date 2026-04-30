@@ -1,8 +1,10 @@
 import type {
   ApplyResponse,
+  ConfigBackupMetadata,
   ConfigImportCandidate,
   CreateModelFromDownloadPayload,
   ConfigPreviewResponse,
+  ConfigRestoreResponse,
   GpuDetectionResponse,
   DownloadJob,
   GpuDevice,
@@ -81,6 +83,9 @@ export const api = {
     request<ConfigPreviewResponse>("/api/config/preview", { method: "POST", body: JSON.stringify({ model_ids: modelIds }) }),
   applyConfig: (stageId: string, confirmDestructive = false) =>
     request<ApplyResponse>("/api/config/apply", { method: "POST", body: JSON.stringify({ stage_id: stageId, confirm_destructive: confirmDestructive }) }),
+  configBackups: () => request<ConfigBackupMetadata[]>("/api/config/backups"),
+  restoreConfig: (backupName: string) =>
+    request<ConfigRestoreResponse>("/api/config/restore", { method: "POST", body: JSON.stringify({ backup_name: backupName }) }),
   configImportCandidates: () => request<ConfigImportCandidate[]>("/api/config/import-candidates"),
   importConfigCandidates: (candidateIds: string[]) =>
     request<ManagedModel[]>("/api/config/import-candidates", { method: "POST", body: JSON.stringify({ candidate_ids: candidateIds }) }),
@@ -110,7 +115,35 @@ function normalizeModel(model: ManagedModel): ManagedModel {
     main_gpu: model.main_gpu === null || Number.isNaN(Number(model.main_gpu)) ? null : Number(model.main_gpu),
     evict_cost: model.evict_cost === null || Number.isNaN(Number(model.evict_cost)) ? null : Number(model.evict_cost),
     ttl: Number(model.ttl) || 0,
+    llama_flags: normalizeLlamaFlags(model.llama_flags),
   };
+}
+
+const numericLlamaFlagKeys = new Set([
+  "ctx_size",
+  "n_gpu_layers",
+  "parallel",
+  "batch_size",
+  "ubatch_size",
+  "temp",
+  "top_p",
+  "top_k",
+  "min_p",
+  "presence_penalty",
+  "repeat_penalty",
+  "keep",
+  "n_predict",
+]);
+
+function normalizeLlamaFlags(flags: ManagedModel["llama_flags"]): ManagedModel["llama_flags"] {
+  return Object.fromEntries(
+    Object.entries(flags ?? {}).flatMap(([key, value]) => {
+      if (value === "") return [];
+      if (!numericLlamaFlagKeys.has(key)) return [[key, value]];
+      const numericValue = Number(value);
+      return Number.isNaN(numericValue) ? [[key, value]] : [[key, numericValue]];
+    }),
+  );
 }
 
 export function splitList(value: string[] | string): string[] {

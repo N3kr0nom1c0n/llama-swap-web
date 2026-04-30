@@ -197,6 +197,21 @@ export interface ApplyResponse {
   restart_note: string;
 }
 
+export interface ConfigBackupMetadata {
+  name: string;
+  path: string;
+  size: number;
+  modified: string;
+}
+
+export interface ConfigRestoreResponse {
+  restored: boolean;
+  source_backup: string;
+  current_backup: string;
+  restart_required: boolean;
+  restart_note: string;
+}
+
 export const modelRoles: ModelRole[] = ["reasoning", "chat", "vision", "coding", "aux"];
 export const matrixBehaviors: MatrixBehavior[] = ["runs_alone", "with_support", "support", "custom"];
 

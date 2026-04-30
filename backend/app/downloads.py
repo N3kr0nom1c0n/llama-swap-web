@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import multiprocessing
 import queue
+import shutil
 import threading
 import time
 import uuid
@@ -35,8 +36,9 @@ class DownloadManager:
         self._threads: dict[str, threading.Thread] = {}
         self._processes: dict[str, multiprocessing.Process] = {}
         self._cancelled: set[str] = set()
-        self._semaphore = threading.Semaphore(max(1, settings.max_parallel_downloads))
         self._lock = threading.Lock()
+        self._slot_available = threading.Condition(self._lock)
+        self._active_downloads = 0
         self._recover_jobs()
 
     def start(self, request: DownloadRequest) -> DownloadJob:
@@ -56,6 +58,21 @@ class DownloadManager:
 
     def list(self) -> list[DownloadJob]:
         return self.db.list_jobs()
+
+    def update_settings(self, settings: ManagerSettings) -> None:
+        with self._slot_available:
+            self.settings = settings
+            self._slot_available.notify_all()
+
+    def cleanup_terminal_jobs(self) -> int:
+        terminal_job_ids = [job.id for job in self.db.list_jobs() if job.status in {"completed", "failed", "cancelled"}]
+        if not terminal_job_ids:
+            return 0
+        with self.db.connect() as conn:
+            conn.executemany("delete from download_jobs where id = ?", [(job_id,) for job_id in terminal_job_ids])
+        for job_id in terminal_job_ids:
+            self._forget_job_tracking(job_id)
+        return len(terminal_job_ids)
 
     def cancel(self, job_id: str) -> DownloadJob:
         job = self.db.get_job(job_id)
@@ -116,26 +133,26 @@ class DownloadManager:
             self.db.save_job(job)
             self._forget_job_tracking(job_id)
             return
-        acquired = self._semaphore.acquire(timeout=0)
-        if not acquired:
-            self._semaphore.acquire()
+        acquired_slot = False
+        self._acquire_download_slot()
+        acquired_slot = True
         job = self.db.get_job(job_id)
-        if not job:
-            self._semaphore.release()
-            self._forget_job_tracking(job_id)
-            return
         try:
+            if not job:
+                return
             if job_id in self._cancelled or job.status == "cancelled":
                 job.status = "cancelled"
                 job.logs.append("cancelled before download")
                 self.db.save_job(job)
                 return
+            token = get_hf_token(self.settings) or False
+            file_info = self._file_info(job, token)
+            self._preflight_disk_space(job, file_info)
             job.status = "running"
             job.logs.append(f"downloading {len(job.files)} file(s) from {job.repo_id}")
             job.progress = 5
             self.db.save_job(job)
             destination = str(Path(job.destination_dir))
-            token = get_hf_token(self.settings) or False
             kwargs = {
                 "repo_id": job.repo_id,
                 "revision": job.revision,
@@ -144,7 +161,6 @@ class DownloadManager:
                 "model_root": self.settings.manager_model_root,
                 "token": token,
             }
-            file_info = self._file_info(job, token) if self.run_in_process else []
             if file_info:
                 job.bytes_total = sum(item.size for item in file_info)
                 job.bytes_downloaded = 0
@@ -175,8 +191,10 @@ class DownloadManager:
                 job.error = str(exc)
                 job.logs.append(f"failed: {exc}")
         finally:
-            self.db.save_job(job)
-            self._semaphore.release()
+            if job:
+                self.db.save_job(job)
+            if acquired_slot:
+                self._release_download_slot()
             self._forget_job_tracking(job_id)
 
     def _container_dir_for_destination(self, destination_dir: str) -> str:
@@ -193,6 +211,20 @@ class DownloadManager:
             self._processes.pop(job_id, None)
         self._cancelled.discard(job_id)
 
+    def _acquire_download_slot(self) -> None:
+        with self._slot_available:
+            while self._active_downloads >= self._max_parallel_downloads():
+                self._slot_available.wait()
+            self._active_downloads += 1
+
+    def _release_download_slot(self) -> None:
+        with self._slot_available:
+            self._active_downloads = max(0, self._active_downloads - 1)
+            self._slot_available.notify_all()
+
+    def _max_parallel_downloads(self) -> int:
+        return max(1, int(self.settings.max_parallel_downloads))
+
     def _file_info(self, job: DownloadJob, token: str | None) -> list[HfFileInfo]:
         try:
             return get_hf_file_info(job.repo_id, job.revision, job.files, token=token)
@@ -200,6 +232,33 @@ class DownloadManager:
             job.logs.append(f"could not estimate download size: {exc}")
             self.db.save_job(job)
             return []
+
+    def _preflight_disk_space(self, job: DownloadJob, file_info: list[HfFileInfo]) -> None:
+        bytes_total = sum(max(0, item.size) for item in file_info)
+        if bytes_total <= 0:
+            return
+        destination = Path(job.destination_dir)
+        if not destination.is_absolute():
+            destination = safe_join(self.settings.manager_model_root, job.destination_dir)
+        usage_path = self._existing_disk_usage_path(destination)
+        usage = shutil.disk_usage(usage_path)
+        free_bytes = usage.free if hasattr(usage, "free") else usage[2]
+        safety_bytes = max(0, int(self.settings.disk_safety_gb)) * 1024**3
+        required_bytes = bytes_total + safety_bytes
+        if free_bytes >= required_bytes:
+            return
+        job.logs.append("low disk space preflight failed")
+        raise RuntimeError(
+            "not enough free disk space for download: "
+            f"need {bytes_total / 1024**3:.1f}GB plus {self.settings.disk_safety_gb}GB safety, "
+            f"free {free_bytes / 1024**3:.1f}GB at {usage_path}"
+        )
+
+    def _existing_disk_usage_path(self, path: Path) -> Path:
+        candidate = path
+        while not candidate.exists() and candidate != candidate.parent:
+            candidate = candidate.parent
+        return candidate
 
     def _download(self, job_id: str, kwargs: dict[str, Any], file_info: list[HfFileInfo] | None = None) -> list[str]:
         if not self.run_in_process:

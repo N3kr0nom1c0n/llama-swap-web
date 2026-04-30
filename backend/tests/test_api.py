@@ -4,9 +4,11 @@ import os
 import sqlite3
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
+from app import settings as settings_module
 from app.main import create_app
 from app.schemas import DownloadJob
 
@@ -71,6 +73,33 @@ def test_hf_token_clear_overrides_startup_environment_token(tmp_path: Path, monk
     assert env_file.read_text(encoding="utf-8") == "HF_TOKEN=\n"
     assert "hf_startup_secret" not in cleared.text
     assert "hf_file_secret" not in cleared.text
+
+
+def test_hf_token_save_preserves_existing_non_token_env_lines(tmp_path: Path, monkeypatch) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("OTHER=value\nHF_TOKEN=hf_existing_secret\nNO_NEWLINE=kept", encoding="utf-8")
+    monkeypatch.setenv("MANAGER_ENV_FILE", str(env_file))
+
+    settings_module.save_hf_token("hf_new_secret")
+
+    assert env_file.read_text(encoding="utf-8") == "OTHER=value\nHF_TOKEN=hf_new_secret\nNO_NEWLINE=kept"
+
+
+def test_hf_token_write_preserves_env_file_when_replace_fails(tmp_path: Path, monkeypatch) -> None:
+    env_file = tmp_path / ".env"
+    original = "OTHER=value\nHF_TOKEN=hf_existing_secret\nTRAILING=kept\n"
+    env_file.write_text(original, encoding="utf-8")
+    monkeypatch.setenv("MANAGER_ENV_FILE", str(env_file))
+
+    def fail_replace(src: str | bytes | os.PathLike[str] | os.PathLike[bytes], dst: str | bytes | os.PathLike[str] | os.PathLike[bytes]) -> None:
+        raise OSError("injected replace failure")
+
+    monkeypatch.setattr(settings_module.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="injected replace failure"):
+        settings_module.save_hf_token("hf_new_secret")
+
+    assert env_file.read_text(encoding="utf-8") == original
 
 
 def test_create_model_maps_manager_files_to_container_paths(tmp_path: Path, monkeypatch) -> None:
@@ -1072,3 +1101,60 @@ def test_upload_oversize_preserves_existing_file(tmp_path: Path, monkeypatch) ->
 
     assert response.status_code == 413
     assert existing.read_bytes() == b"existing-model"
+
+
+def test_config_backup_routes_list_and_restore_selected_backup(tmp_path: Path, monkeypatch) -> None:
+    config_path = tmp_path / "config.yaml"
+    backups_dir = tmp_path / "backups"
+    backups_dir.mkdir()
+    config_path.write_text("models:\n  current: {}\n", encoding="utf-8")
+    selected = backups_dir / "config-20260430-120000-000000.yaml"
+    selected.write_text("models:\n  restored: {}\n", encoding="utf-8")
+    monkeypatch.setenv("LLAMA_SWAP_CONFIG_PATH", str(config_path))
+    monkeypatch.setenv("BACKUPS_DIR", str(backups_dir))
+    app = create_app(tmp_path / "manager.db")
+    client = TestClient(app)
+
+    listed = client.get("/api/config/backups")
+    restored = client.post("/api/config/restore", json={"backup_name": selected.name})
+
+    assert listed.status_code == 200
+    assert [item["name"] for item in listed.json()] == [selected.name]
+    assert restored.status_code == 200
+    payload = restored.json()
+    assert payload["restored"] is True
+    assert payload["source_backup"] == selected.name
+    assert payload["restart_required"] is True
+    assert Path(payload["current_backup"]).exists()
+    assert config_path.read_text(encoding="utf-8") == "models:\n  restored: {}\n"
+
+
+def test_config_restore_route_rejects_backup_traversal(tmp_path: Path, monkeypatch) -> None:
+    config_path = tmp_path / "config.yaml"
+    backups_dir = tmp_path / "backups"
+    backups_dir.mkdir()
+    config_path.write_text("models: {}\n", encoding="utf-8")
+    monkeypatch.setenv("LLAMA_SWAP_CONFIG_PATH", str(config_path))
+    monkeypatch.setenv("BACKUPS_DIR", str(backups_dir))
+    app = create_app(tmp_path / "manager.db")
+    client = TestClient(app)
+
+    response = client.post("/api/config/restore", json={"backup_name": "../config.yaml"})
+
+    assert response.status_code == 400
+    assert config_path.read_text(encoding="utf-8") == "models: {}\n"
+
+
+def test_download_cleanup_route_removes_terminal_jobs_only(tmp_path: Path) -> None:
+    app = create_app(tmp_path / "manager.db")
+    client = TestClient(app)
+    app.state.db.save_job(DownloadJob(id="complete", status="completed", repo_id="org/repo"))
+    app.state.db.save_job(DownloadJob(id="failed", status="failed", repo_id="org/repo"))
+    app.state.db.save_job(DownloadJob(id="running", status="running", repo_id="org/repo"))
+
+    response = client.delete("/api/downloads/terminal")
+
+    assert response.status_code == 200
+    assert response.json() == {"removed": 2}
+    remaining = {job["id"] for job in client.get("/api/downloads").json()}
+    assert remaining == {"running"}

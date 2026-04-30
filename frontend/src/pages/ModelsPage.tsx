@@ -18,6 +18,7 @@ export function ModelsPage() {
   const importCandidates = useQuery({ queryKey: queryKeys.configImport, queryFn: api.configImportCandidates, enabled: false });
   const [selectedId, setSelectedId] = useState<string>("");
   const [draft, setDraft] = useState<ManagedModel>(emptyModel());
+  const [listDrafts, setListDrafts] = useState(() => listDraftsFromModel(emptyModel()));
 
   useEffect(() => {
     if (!selectedId && models.data?.[0]) setSelectedId(models.data[0].id);
@@ -25,7 +26,10 @@ export function ModelsPage() {
 
   useEffect(() => {
     const found = models.data?.find((model) => model.id === selectedId);
-    if (found) setDraft(found);
+    if (found) {
+      setDraft(found);
+      setListDrafts(listDraftsFromModel(found));
+    }
   }, [models.data, selectedId]);
 
   const save = useMutation({
@@ -54,12 +58,18 @@ export function ModelsPage() {
     setDraft((current) => ({ ...current, ...patch }));
   }
 
+  function updateList(field: keyof ModelListDrafts, value: string) {
+    setListDrafts((current) => ({ ...current, [field]: value }));
+    update({ [field]: splitList(value) } as Pick<ManagedModel, keyof ModelListDrafts>);
+  }
+
   function startNew() {
     const next = emptyModel();
     next.hf_revision = settings.data?.default_revision ?? "main";
     next.ttl = defaultTtlForRole(settings.data, next.role);
     setSelectedId("");
     setDraft(next);
+    setListDrafts(listDraftsFromModel(next));
   }
 
   return (
@@ -171,16 +181,16 @@ export function ModelsPage() {
               <input type="number" value={draft.ttl} onChange={(event) => update({ ttl: Number(event.target.value) })} />
             </Field>
             <Field label="Aliases" hint="Comma or newline separated">
-              <textarea value={draft.aliases.join("\n")} onChange={(event) => update({ aliases: splitList(event.target.value) })} />
+              <textarea value={listDrafts.aliases} onChange={(event) => updateList("aliases", event.target.value)} />
             </Field>
           </div>
 
           <div className="form-grid wide">
             <Field label="Manager files" hint="Host-visible manager paths, one per line">
-              <textarea value={draft.manager_files.join("\n")} onChange={(event) => update({ manager_files: splitList(event.target.value) })} />
+              <textarea value={listDrafts.manager_files} onChange={(event) => updateList("manager_files", event.target.value)} />
             </Field>
             <Field label="Container files" hint="Generated llama-swap paths, one per line">
-              <textarea value={draft.container_files.join("\n")} onChange={(event) => update({ container_files: splitList(event.target.value) })} />
+              <textarea value={listDrafts.container_files} onChange={(event) => updateList("container_files", event.target.value)} />
             </Field>
             <Field label="Primary model file">
               <input value={draft.primary_model_file} onChange={(event) => update({ primary_model_file: event.target.value })} />
@@ -192,7 +202,7 @@ export function ModelsPage() {
               <input value={draft.chat_template_file} onChange={(event) => update({ chat_template_file: event.target.value })} />
             </Field>
             <Field label="Tokenizer files">
-              <textarea value={draft.tokenizer_files.join("\n")} onChange={(event) => update({ tokenizer_files: splitList(event.target.value) })} />
+              <textarea value={listDrafts.tokenizer_files} onChange={(event) => updateList("tokenizer_files", event.target.value)} />
             </Field>
           </div>
 
@@ -269,6 +279,17 @@ export function ModelsPage() {
       </section>
     </div>
   );
+}
+
+type ModelListDrafts = Pick<ManagedModel, "aliases" | "manager_files" | "container_files" | "tokenizer_files">;
+
+function listDraftsFromModel(model: ManagedModel): Record<keyof ModelListDrafts, string> {
+  return {
+    aliases: model.aliases.join("\n"),
+    manager_files: model.manager_files.join("\n"),
+    container_files: model.container_files.join("\n"),
+    tokenizer_files: model.tokenizer_files.join("\n"),
+  };
 }
 
 function FlagEditor({ model, onChange }: { model: ManagedModel; onChange: (patch: Partial<ManagedModel>) => void }) {

@@ -127,7 +127,7 @@ export const helpSections: HelpSection[] = [
         body: [
           "The planner stores CUDA index, GPU name, VRAM, role, and notes. Model entries use CUDA indexes to generate CUDA_VISIBLE_DEVICES and related placement fields.",
           "For your rig, typical examples are 3090 cards for large/reasoning/coding models and smaller cards for aux, embedding, reranker, or vision support workloads.",
-          "The planner does not probe hardware yet. Treat it as the source of truth you maintain for the manager.",
+          "Use Detect GPUs when the manager can reach nvidia-smi. If detection is unavailable, keep the manual inventory accurate and treat saved GPU rows as the planning source of truth.",
         ],
         settings: [
           {
@@ -151,11 +151,13 @@ export const helpSections: HelpSection[] = [
         body: [
           "Config Preview renders the full config.yaml content from saved model entries. It also shows a unified diff against the current mounted config file.",
           "Apply Config writes only a staged preview. If model entries change after preview, regenerate before applying. This prevents applying a config you did not inspect.",
+          "The Backups section lists safe config backups created by apply or restore. Restoring a backup first backs up the current config, then replaces the active config with the selected backup.",
           "After apply, restart llama-swap manually. Version 1 does not restart Docker services.",
         ],
         warnings: [
           "Never apply a config if validation errors remain.",
-          "Backups are created first, but a bad config can still stop llama-swap from loading models until corrected.",
+          "Backups are created first, but a bad config can still stop llama-swap from loading models until corrected or restored.",
+          "Restore also requires a manual llama-swap restart before the restored config is used.",
         ],
       },
       {
@@ -558,6 +560,7 @@ export const helpSections: HelpSection[] = [
         body: [
           "Check Dashboard config status. If it is not writable, verify the compose bind mount for config.yaml is a file mount and not a directory.",
           "If generated paths look wrong, verify Manager model root and Llama-swap model root. The generated command should use /models/... paths.",
+          "If a bad config was applied, use Config Preview > Backups to restore a previous config, then restart llama-swap manually.",
         ],
       },
       {

@@ -1,6 +1,39 @@
 # Backlog
 
-## Claude Code Review Findings: 2026-04-30
+## Production Hardening Update: 2026-04-30
+
+This backlog is still the source of truth for remaining v1 work. The superseding implementation plan is `docs/superpowers/plans/2026-04-30-production-ready-completion.md`; verified evidence is tracked in `artifacts/release-checklist.md` and `artifacts/qa/production-hardening-phase-1.md`.
+
+### Completed In Current Production-Hardening Pass
+
+- C1: Uploads stream in bounded chunks, enforce `max_upload_bytes`, write through temp files, and reject unsafe paths/extensions/symlink escapes.
+- C2: Docker runtime is non-root by default, Compose no longer recommends host `/tmp:/tmp`, and smoke verifies runtime UID `10001`.
+- C3: Direct `pydantic` dependency is covered by backend tests and Docker build.
+- C4: GHCR workflow/docs now align around `latest` on the default branch and version/SHA tags.
+- B1: Config preview remains read-only; writable path effects are limited to apply/restore flows.
+- B2: Config generation preserves custom hooks and only manages the preload values it owns.
+- B3: Generated llama-server command values are shell-quoted where needed.
+- B4: Hugging Face downloads preserve safe nested paths, reject unsafe names, reject symlink escapes, and avoid same-basename collisions.
+- B6/B7/B12: Config apply uses staged fingerprints, expiry, replay protection, collision-proof backups, atomic writes where possible, bind-mount fallback, and typed read/write errors.
+- B8/B9/B10/B11/B13: HF token handling uses schemas and atomic env-file writes without process-wide mutation; download runtime state can be cleaned up; `max_parallel_downloads` changes apply at runtime.
+- F1/F2/F3: Managed Models command preview includes `--n-gpu-layers`, textarea list editing preserves in-progress input, and numeric llama flags are normalized before save.
+- Config backup restore: Config Preview now lists backups and can restore a selected backup through the API/UI while first backing up the current config.
+- Documentation: README, in-app Help, and `docs/wiki/` now cover production Docker, native setup, settings, model workflows, GPU planning, config preview/apply/restore, troubleshooting, and release QA.
+
+### Still Open Before A v1.0 Tag
+
+- Add audit logging for settings changes, HF token changes, downloads, uploads, model edits, config preview/apply, and backup restore.
+- Either implement real SSE events with heartbeat/reconnect semantics or remove `/api/events` and docs references until it is useful.
+- Finish advanced settings validation and test buttons: Test paths, Test HF token, Test config write, restart-required badges, and stale success/error handling.
+- Add unsaved-change guards and dirty-refetch protection across Settings, Managed Models, and GPU Planner.
+- Add scoped file picker/browser controls for `/models` so users do not need to type paths.
+- Improve HF resolve UX: direct file URLs should not select unrelated GGUFs, multipart groups should enforce full shard selection, and HF errors should distinguish auth/rate/network/server failures.
+- Deepen GPU intelligence beyond current detection/recommendation: model fit estimates, KV-cache estimates, matrix overcommit warnings, and per-model plan validation before apply.
+- Add versioned releases/changelog and verify the GHCR publish workflow end to end from `main`.
+
+## Original Claude Code Review Findings: 2026-04-30
+
+Status note: items completed by later work are summarized in the production hardening update above; the original findings are kept here for traceability.
 
 ### Critical
 

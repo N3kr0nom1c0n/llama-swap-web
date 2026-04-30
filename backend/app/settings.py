@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -216,11 +217,49 @@ def _write_env_token(path: Path, token: str, keep_empty: bool = False) -> None:
         if next_lines and not next_lines[-1].endswith("\n"):
             next_lines[-1] += "\n"
         next_lines.append(f"{HF_TOKEN_KEY}={token}\n")
-    path.write_text("".join(next_lines), encoding="utf-8")
+    _atomic_write_text(path, "".join(next_lines), mode=0o600)
     try:
         path.chmod(0o600)
     except OSError:
         pass
+
+
+def _atomic_write_text(path: Path, content: str, mode: int) -> None:
+    fd = -1
+    temp_path: Path | None = None
+    try:
+        fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+        temp_path = Path(temp_name)
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+        temp_path = None
+        _fsync_parent_dir(path)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        if temp_path is not None:
+            try:
+                temp_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def _fsync_parent_dir(path: Path) -> None:
+    try:
+        dir_fd = os.open(path.parent, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(dir_fd)
+    except OSError:
+        pass
+    finally:
+        os.close(dir_fd)
 
 
 def _parse_env_line(line: str) -> tuple[str, str]:

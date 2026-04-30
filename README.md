@@ -13,6 +13,7 @@ The app is intentionally local/LAN focused. Version 1 has no login, does not mou
 - Manage model metadata, GPU placement, llama.cpp flags, aliases, preload behavior, and matrix membership.
 - Generate a llama-swap `matrix` config preview with a unified diff.
 - Validate staged YAML, create a timestamped backup, and apply the config only after approval.
+- List and restore config backups from the UI when a generated config needs rollback.
 - Provide a built-in Help page that explains every app area and the important model settings.
 
 ## Recommended Docker Install
@@ -233,6 +234,19 @@ docker compose restart llama-swap
 
 Run that in the Compose project that actually owns your llama-swap container. The manager intentionally does not restart llama-swap in v1.
 
+## Backup And Restore
+
+Config Preview shows backups created under `/backups`. Applying config and restoring config both create a backup of the current file first.
+
+To restore from the UI:
+
+1. Open Config Preview.
+2. Review the Backups section.
+3. Click Restore on the backup you want.
+4. Restart llama-swap manually after restore.
+
+Only safe `config*.yaml` backups inside the configured backups directory are listed or restorable. Traversal paths, directories, missing files, and symlink escapes are rejected by the API.
+
 ## Tests
 
 Backend:
@@ -246,6 +260,12 @@ Frontend:
 ```sh
 npm test
 npm run build
+```
+
+Secret scan:
+
+```sh
+bash scripts/secret-scan.sh
 ```
 
 Browser smoke tests run against an already-running native app or container. The default target is `http://127.0.0.1:8081`; override it with `BASE_URL` when needed:

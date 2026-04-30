@@ -5,6 +5,7 @@ export const queryKeys = {
   gpuDetection: ["gpus", "detect"] as const,
   gpuStatus: ["gpus", "status"] as const,
   models: ["models"] as const,
+  configBackups: ["config", "backups"] as const,
   configImport: ["config", "import"] as const,
   preview: ["preview"] as const,
 };

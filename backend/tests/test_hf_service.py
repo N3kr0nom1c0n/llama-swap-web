@@ -405,3 +405,152 @@ def test_download_progress_uses_hf_cache_bytes(tmp_path) -> None:
     assert updated.bytes_total == 100
     assert updated.active_file == "model.gguf"
     assert updated.progress == 40
+
+
+def test_cleanup_terminal_jobs_removes_records_and_stale_tracking(tmp_path) -> None:
+    db = Database(tmp_path / "manager.db")
+    db.init()
+    settings = ManagerSettings(manager_model_root=str(tmp_path / "models"), llama_swap_model_root="/models")
+    manager = DownloadManager(db, settings, run_in_process=False)
+    for status in ["completed", "failed", "cancelled", "queued", "running"]:
+        db.save_job(
+            DownloadJob(
+                id=f"{status}-job",
+                status=status,
+                repo_id="org/repo",
+                files=["tiny.gguf"],
+                destination_dir=str(tmp_path / "models" / "chat"),
+            )
+        )
+    manager._threads["completed-job"] = threading.Thread()
+    manager._threads["running-job"] = threading.Thread()
+    manager._processes["failed-job"] = object()  # type: ignore[assignment]
+    manager._cancelled.update({"cancelled-job", "running-job"})
+
+    removed = manager.cleanup_terminal_jobs()
+
+    assert removed == 3
+    assert db.get_job("completed-job") is None
+    assert db.get_job("failed-job") is None
+    assert db.get_job("cancelled-job") is None
+    assert db.get_job("queued-job") is not None
+    assert db.get_job("running-job") is not None
+    assert "completed-job" not in manager._threads
+    assert "failed-job" not in manager._processes
+    assert "cancelled-job" not in manager._cancelled
+    assert "running-job" in manager._threads
+    assert "running-job" in manager._cancelled
+
+
+def test_low_disk_preflight_blocks_before_download_starts(tmp_path, monkeypatch) -> None:
+    db = Database(tmp_path / "manager.db")
+    db.init()
+    settings = ManagerSettings(
+        manager_model_root=str(tmp_path / "models"),
+        llama_swap_model_root="/models",
+        disk_safety_gb=1,
+    )
+    manager = DownloadManager(db, settings, run_in_process=False)
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        manager,
+        "_file_info",
+        lambda job, token: [
+            HfFileInfo(
+                path="tiny.gguf",
+                size=10 * 1024**3,
+                cache_path=tmp_path / "cache" / "tiny.gguf",
+                incomplete_path=tmp_path / "cache" / "tiny.gguf.incomplete",
+            )
+        ],
+    )
+    monkeypatch.setattr("app.downloads.shutil.disk_usage", lambda path: (100 * 1024**3, 95 * 1024**3, 5 * 1024**3))
+
+    def fake_download_selected_files(**kwargs):
+        calls.append(kwargs["repo_id"])
+        return []
+
+    monkeypatch.setattr("app.downloads.download_selected_files", fake_download_selected_files)
+    job = manager.start(DownloadRequest(repo_id="org/repo", files=["tiny.gguf"], destination_dir=str(tmp_path / "models" / "chat")))
+    manager._threads[job.id].join(timeout=5)
+
+    failed = db.get_job(job.id)
+    assert failed is not None
+    assert failed.status == "failed"
+    assert "not enough free disk space" in failed.error
+    assert "low disk space preflight failed" in failed.logs
+    assert calls == []
+    assert job.id not in manager._threads
+
+
+def test_unknown_download_size_does_not_block_disk_preflight(tmp_path, monkeypatch) -> None:
+    db = Database(tmp_path / "manager.db")
+    db.init()
+    settings = ManagerSettings(
+        manager_model_root=str(tmp_path / "models"),
+        llama_swap_model_root="/models",
+        disk_safety_gb=1,
+    )
+    manager = DownloadManager(db, settings, run_in_process=False)
+
+    monkeypatch.setattr(manager, "_file_info", lambda job, token: [])
+    monkeypatch.setattr("app.downloads.shutil.disk_usage", lambda path: (100 * 1024**3, 100 * 1024**3, 0))
+
+    def fake_download_selected_files(**kwargs):
+        target = tmp_path / "models" / "chat" / "tiny.gguf"
+        target.parent.mkdir(parents=True)
+        target.write_text("fake", encoding="utf-8")
+        return [str(target)]
+
+    monkeypatch.setattr("app.downloads.download_selected_files", fake_download_selected_files)
+    job = manager.start(DownloadRequest(repo_id="org/repo", files=["tiny.gguf"], destination_dir=str(tmp_path / "models" / "chat")))
+    manager._threads[job.id].join(timeout=5)
+
+    completed = db.get_job(job.id)
+    assert completed is not None
+    assert completed.status == "completed"
+
+
+def test_update_settings_increases_download_concurrency_at_runtime(tmp_path, monkeypatch) -> None:
+    db = Database(tmp_path / "manager.db")
+    db.init()
+    settings = ManagerSettings(
+        manager_model_root=str(tmp_path / "models"),
+        llama_swap_model_root="/models",
+        max_parallel_downloads=1,
+    )
+    manager = DownloadManager(db, settings, run_in_process=False)
+    started: list[str] = []
+    release_download = threading.Event()
+    both_started = threading.Event()
+
+    def fake_download_selected_files(**kwargs):
+        started.append(kwargs["repo_id"])
+        if len(started) == 2:
+            both_started.set()
+        release_download.wait(timeout=5)
+        target = tmp_path / "models" / kwargs["repo_id"].split("/")[-1] / "tiny.gguf"
+        target.parent.mkdir(parents=True)
+        target.write_text("fake", encoding="utf-8")
+        return [str(target)]
+
+    monkeypatch.setattr("app.downloads.download_selected_files", fake_download_selected_files)
+    first = manager.start(DownloadRequest(repo_id="org/one", files=["tiny.gguf"], destination_dir=str(tmp_path / "models" / "one")))
+    second = manager.start(DownloadRequest(repo_id="org/two", files=["tiny.gguf"], destination_dir=str(tmp_path / "models" / "two")))
+
+    while not started:
+        pass
+    assert started == ["org/one"]
+
+    manager.update_settings(settings.model_copy(update={"max_parallel_downloads": 2}))
+
+    assert both_started.wait(timeout=5)
+    first_thread = manager._threads[first.id]
+    second_thread = manager._threads[second.id]
+    release_download.set()
+    first_thread.join(timeout=5)
+    second_thread.join(timeout=5)
+
+    assert db.get_job(first.id).status == "completed"  # type: ignore[union-attr]
+    assert db.get_job(second.id).status == "completed"  # type: ignore[union-attr]
