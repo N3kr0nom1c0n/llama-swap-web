@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from app.main import create_app
+from app.schemas import DownloadJob
 
 
 def test_state_initializes_db_and_redacts_hf_token(tmp_path: Path, monkeypatch) -> None:
@@ -118,6 +119,249 @@ def test_create_model_rejects_manager_file_outside_root(tmp_path: Path, monkeypa
 
     assert response.status_code == 400
     assert "outside manager root" in response.json()["detail"]
+
+
+def test_create_model_from_completed_download_infers_installed_files(tmp_path: Path, monkeypatch) -> None:
+    models_dir = tmp_path / "models"
+    monkeypatch.setenv("MANAGER_MODEL_ROOT", str(models_dir))
+    monkeypatch.setenv("LLAMA_SWAP_MODEL_ROOT", "/models")
+    app = create_app(tmp_path / "manager.db")
+    client = TestClient(app)
+    installed_dir = models_dir / "vision" / "qwen"
+    files = {
+        "model": installed_dir / "qwen-00001-of-00002.gguf",
+        "part2": installed_dir / "qwen-00002-of-00002.gguf",
+        "mmproj": installed_dir / "mmproj-F16.gguf",
+        "template": installed_dir / "chat_template.jinja",
+        "tokenizer": installed_dir / "tokenizer.json",
+    }
+    for path in files.values():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("fake", encoding="utf-8")
+    written_files = [str(path) for path in files.values()]
+    container_files = [f"/models/vision/qwen/{path.name}" for path in files.values()]
+    app.state.db.save_job(
+        DownloadJob(
+            id="downloaded-qwen",
+            status="completed",
+            repo_id="org/qwen",
+            revision="main",
+            files=[path.name for path in files.values()],
+            destination_dir=str(installed_dir),
+            container_dir="/models/vision/qwen",
+            written_files=written_files,
+            container_files=container_files,
+        )
+    )
+
+    response = client.post(
+        "/api/models/from-download/downloaded-qwen",
+        json={
+            "id": "qwen-vision",
+            "display_name": "Qwen Vision",
+            "role": "vision",
+            "gpu_devices": [0, 1],
+            "matrix_behavior": "runs_alone",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == "qwen-vision"
+    assert payload["display_name"] == "Qwen Vision"
+    assert payload["source_type"] == "hf"
+    assert payload["hf_url"] == "https://huggingface.co/org/qwen"
+    assert payload["hf_revision"] == "main"
+    assert payload["role"] == "vision"
+    assert payload["ttl"] == 300
+    assert payload["gpu_devices"] == [0, 1]
+    assert payload["manager_files"] == written_files
+    assert payload["container_files"] == container_files
+    assert payload["primary_model_file"] == "/models/vision/qwen/qwen-00001-of-00002.gguf"
+    assert payload["mmproj_file"] == "/models/vision/qwen/mmproj-F16.gguf"
+    assert payload["chat_template_file"] == "/models/vision/qwen/chat_template.jinja"
+    assert payload["tokenizer_files"] == ["/models/vision/qwen/tokenizer.json"]
+    listed = client.get("/api/models").json()
+    assert [model["id"] for model in listed] == ["qwen-vision"]
+
+
+def test_create_model_from_download_rejects_incomplete_or_missing_files(tmp_path: Path, monkeypatch) -> None:
+    models_dir = tmp_path / "models"
+    monkeypatch.setenv("MANAGER_MODEL_ROOT", str(models_dir))
+    monkeypatch.setenv("LLAMA_SWAP_MODEL_ROOT", "/models")
+    app = create_app(tmp_path / "manager.db")
+    client = TestClient(app)
+    app.state.db.save_job(
+        DownloadJob(
+            id="running-download",
+            status="running",
+            repo_id="org/repo",
+            files=["model.gguf"],
+            destination_dir=str(models_dir / "chat" / "repo"),
+        )
+    )
+    app.state.db.save_job(
+        DownloadJob(
+            id="missing-file",
+            status="completed",
+            repo_id="org/repo",
+            files=["model.gguf"],
+            destination_dir=str(models_dir / "chat" / "repo"),
+            written_files=[str(models_dir / "chat" / "repo" / "model.gguf")],
+            container_files=["/models/chat/repo/model.gguf"],
+        )
+    )
+
+    running = client.post("/api/models/from-download/running-download", json={"role": "chat"})
+    missing = client.post("/api/models/from-download/missing-file", json={"role": "chat"})
+
+    assert running.status_code == 409
+    assert "completed" in running.json()["detail"]
+    assert missing.status_code == 409
+    assert "missing" in missing.json()["detail"]
+
+
+def test_create_model_from_download_rejects_incomplete_multipart_job(tmp_path: Path, monkeypatch) -> None:
+    models_dir = tmp_path / "models"
+    first_part = models_dir / "chat" / "repo" / "model-00001-of-00002.gguf"
+    first_part.parent.mkdir(parents=True)
+    first_part.write_text("fake", encoding="utf-8")
+    monkeypatch.setenv("MANAGER_MODEL_ROOT", str(models_dir))
+    monkeypatch.setenv("LLAMA_SWAP_MODEL_ROOT", "/models")
+    app = create_app(tmp_path / "manager.db")
+    client = TestClient(app)
+    app.state.db.save_job(
+        DownloadJob(
+            id="partial-multipart",
+            status="completed",
+            repo_id="org/repo",
+            files=["model-00001-of-00002.gguf", "model-00002-of-00002.gguf"],
+            destination_dir=str(first_part.parent),
+            written_files=[str(first_part)],
+            container_files=["/models/chat/repo/model-00001-of-00002.gguf"],
+        )
+    )
+
+    response = client.post("/api/models/from-download/partial-multipart", json={"role": "chat"})
+
+    assert response.status_code == 409
+    assert "incomplete" in response.json()["detail"]
+
+
+def test_create_model_from_download_rejects_single_selected_multipart_part(tmp_path: Path, monkeypatch) -> None:
+    models_dir = tmp_path / "models"
+    first_part = models_dir / "chat" / "repo" / "model-00001-of-00002.gguf"
+    first_part.parent.mkdir(parents=True)
+    first_part.write_text("fake", encoding="utf-8")
+    monkeypatch.setenv("MANAGER_MODEL_ROOT", str(models_dir))
+    monkeypatch.setenv("LLAMA_SWAP_MODEL_ROOT", "/models")
+    app = create_app(tmp_path / "manager.db")
+    client = TestClient(app)
+    app.state.db.save_job(
+        DownloadJob(
+            id="selected-first-only",
+            status="completed",
+            repo_id="org/repo",
+            files=["model-00001-of-00002.gguf"],
+            destination_dir=str(first_part.parent),
+            written_files=[str(first_part)],
+            container_files=["/models/chat/repo/model-00001-of-00002.gguf"],
+        )
+    )
+
+    response = client.post("/api/models/from-download/selected-first-only", json={"role": "chat"})
+
+    assert response.status_code == 409
+    assert "incomplete" in response.json()["detail"]
+
+
+def test_create_model_from_download_infers_role_from_destination_when_omitted(tmp_path: Path, monkeypatch) -> None:
+    models_dir = tmp_path / "models"
+    model_file = models_dir / "vision" / "repo" / "model.gguf"
+    model_file.parent.mkdir(parents=True)
+    model_file.write_text("fake", encoding="utf-8")
+    monkeypatch.setenv("MANAGER_MODEL_ROOT", str(models_dir))
+    monkeypatch.setenv("LLAMA_SWAP_MODEL_ROOT", "/models")
+    app = create_app(tmp_path / "manager.db")
+    client = TestClient(app)
+    app.state.db.save_job(
+        DownloadJob(
+            id="vision-download",
+            status="completed",
+            repo_id="org/repo",
+            files=["model.gguf"],
+            destination_dir=str(model_file.parent),
+            container_dir="/models/vision/repo",
+            written_files=[str(model_file)],
+            container_files=["/models/vision/repo/model.gguf"],
+        )
+    )
+
+    response = client.post("/api/models/from-download/vision-download", json={})
+
+    assert response.status_code == 200
+    assert response.json()["role"] == "vision"
+    assert response.json()["ttl"] == 300
+
+
+def test_create_model_from_download_rejects_existing_requested_id(tmp_path: Path, monkeypatch) -> None:
+    models_dir = tmp_path / "models"
+    model_file = models_dir / "chat" / "repo" / "model.gguf"
+    model_file.parent.mkdir(parents=True)
+    model_file.write_text("fake", encoding="utf-8")
+    monkeypatch.setenv("MANAGER_MODEL_ROOT", str(models_dir))
+    monkeypatch.setenv("LLAMA_SWAP_MODEL_ROOT", "/models")
+    app = create_app(tmp_path / "manager.db")
+    client = TestClient(app)
+    client.post(
+        "/api/models",
+        json={
+            "id": "repo",
+            "display_name": "Existing Repo",
+            "role": "chat",
+            "manager_files": [str(model_file)],
+        },
+    )
+    app.state.db.save_job(
+        DownloadJob(
+            id="duplicate-download",
+            status="completed",
+            repo_id="org/repo",
+            files=["model.gguf"],
+            destination_dir=str(model_file.parent),
+            written_files=[str(model_file)],
+            container_files=["/models/chat/repo/model.gguf"],
+        )
+    )
+
+    response = client.post("/api/models/from-download/duplicate-download", json={"id": "repo"})
+
+    assert response.status_code == 409
+    assert "already exists" in response.json()["detail"]
+
+
+def test_model_scan_discovers_supported_files_without_following_external_symlinks(tmp_path: Path, monkeypatch) -> None:
+    models_dir = tmp_path / "models"
+    inside = models_dir / "chat" / "tiny" / "tiny.gguf"
+    template = models_dir / "chat" / "tiny" / "chat_template.jinja"
+    outside = tmp_path / "outside.gguf"
+    inside.parent.mkdir(parents=True)
+    inside.write_text("fake", encoding="utf-8")
+    template.write_text("fake", encoding="utf-8")
+    outside.write_text("outside", encoding="utf-8")
+    os.symlink(outside, models_dir / "chat" / "tiny" / "escape.gguf")
+    monkeypatch.setenv("MANAGER_MODEL_ROOT", str(models_dir))
+    monkeypatch.setenv("LLAMA_SWAP_MODEL_ROOT", "/models")
+    app = create_app(tmp_path / "manager.db")
+    client = TestClient(app)
+
+    response = client.get("/api/models/scan")
+
+    assert response.status_code == 200
+    by_container_path = {item["container_path"]: item for item in response.json()}
+    assert by_container_path["/models/chat/tiny/tiny.gguf"]["kind"] == "gguf"
+    assert by_container_path["/models/chat/tiny/chat_template.jinja"]["kind"] == "chat_template"
+    assert "/models/chat/tiny/escape.gguf" not in by_container_path
 
 
 def test_import_returns_manager_destination_and_container_destination(tmp_path: Path, monkeypatch) -> None:

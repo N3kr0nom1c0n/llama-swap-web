@@ -20,7 +20,9 @@ from .hf_service import resolve_hf_url
 from .schemas import (
     ConfigApplyRequest,
     ConfigPreviewRequest,
+    CreateModelFromDownloadRequest,
     DownloadRequest,
+    FileInventoryItem,
     GpuDevice,
     HfResolveRequest,
     HfTokenRequest,
@@ -28,6 +30,7 @@ from .schemas import (
     ManagedModel,
     StateResponse,
 )
+from .model_inventory import model_from_download, scan_model_files
 from .settings import ManagerSettings, clear_hf_token, default_db_path, get_hf_token, save_hf_token
 
 UPLOAD_CHUNK_SIZE = 1024 * 1024
@@ -158,6 +161,22 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     @app.get("/api/models")
     def list_models() -> list[dict]:
         return [model.model_dump(mode="json") for model in db.list_models()]
+
+    @app.get("/api/models/scan", response_model=list[FileInventoryItem])
+    def scan_models() -> list[FileInventoryItem]:
+        return scan_model_files(db.get_settings())
+
+    @app.post("/api/models/from-download/{job_id}")
+    def create_model_from_download(job_id: str, payload: CreateModelFromDownloadRequest) -> dict:
+        job = db.get_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="download job not found")
+        try:
+            existing_ids = {model.id for model in db.list_models()}
+            model = model_from_download(job, payload, db.get_settings(), existing_ids)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return db.save_model(model).model_dump(mode="json")
 
     @app.post("/api/models")
     def save_model(model: ManagedModel) -> dict:

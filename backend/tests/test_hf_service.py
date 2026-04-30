@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from app.hf_service import HfFileInfo, classify_file, classify_files, download_selected_files, get_hf_file_info, parse_hf_url, resolve_hf_url
@@ -95,13 +97,184 @@ def test_hf_calls_do_not_fall_back_to_process_env_token(monkeypatch, tmp_path) -
     assert calls["download_token"] is False
 
 
-def test_download_job_records_written_and_container_files(tmp_path, monkeypatch) -> None:
+def test_download_selected_files_preserves_nested_paths_and_basename_collisions(tmp_path, monkeypatch) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+
+    def fake_download(**kwargs):
+        cached = cache_dir / kwargs["filename"].replace("/", "__")
+        cached.write_text(kwargs["filename"], encoding="utf-8")
+        return str(cached)
+
+    monkeypatch.setattr("app.hf_service.hf_hub_download", fake_download)
+
+    written = download_selected_files(
+        "org/repo",
+        "main",
+        ["shards/model.gguf", "alt/model.gguf"],
+        str(tmp_path / "models" / "chat"),
+        str(tmp_path / "models"),
+        token=False,
+    )
+
+    assert written == [
+        str(tmp_path / "models" / "chat" / "shards" / "model.gguf"),
+        str(tmp_path / "models" / "chat" / "alt" / "model.gguf"),
+    ]
+    assert (tmp_path / "models" / "chat" / "shards" / "model.gguf").read_text(encoding="utf-8") == "shards/model.gguf"
+    assert (tmp_path / "models" / "chat" / "alt" / "model.gguf").read_text(encoding="utf-8") == "alt/model.gguf"
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ["../escape.gguf", "/escape.gguf", "dir\\escape.gguf", "dir//escape.gguf", "C:/escape.gguf", "C:escape.gguf", "C:.gguf"],
+)
+def test_download_selected_files_rejects_unsafe_paths(tmp_path, monkeypatch, filename) -> None:
+    def fake_download(**kwargs):
+        raise AssertionError("unsafe filenames should be rejected before download")
+
+    monkeypatch.setattr("app.hf_service.hf_hub_download", fake_download)
+
+    with pytest.raises(ValueError):
+        download_selected_files(
+            "org/repo",
+            "main",
+            [filename],
+            str(tmp_path / "models" / "chat"),
+            str(tmp_path / "models"),
+            token=False,
+        )
+
+
+@pytest.mark.parametrize("destination", ["C:/models/repo", "C:models/repo", "C:\\models\\repo"])
+def test_download_selected_files_rejects_windows_drive_destinations(tmp_path, monkeypatch, destination) -> None:
+    def fake_download(**kwargs):
+        raise AssertionError("unsafe destination should be rejected before download")
+
+    monkeypatch.setattr("app.hf_service.hf_hub_download", fake_download)
+
+    with pytest.raises(ValueError):
+        download_selected_files(
+            "org/repo",
+            "main",
+            ["model.gguf"],
+            destination,
+            str(tmp_path / "models"),
+            token=False,
+        )
+
+
+def test_download_selected_files_refuses_to_overwrite_existing_target(tmp_path, monkeypatch) -> None:
+    destination = tmp_path / "models" / "chat"
+    existing = destination / "shards" / "model.gguf"
+    existing.parent.mkdir(parents=True)
+    existing.write_text("existing", encoding="utf-8")
+    cached = tmp_path / "cached.gguf"
+    cached.write_text("new", encoding="utf-8")
+
+    def fake_download(**kwargs):
+        return str(cached)
+
+    monkeypatch.setattr("app.hf_service.hf_hub_download", fake_download)
+
+    with pytest.raises(FileExistsError):
+        download_selected_files(
+            "org/repo",
+            "main",
+            ["shards/model.gguf"],
+            str(destination),
+            str(tmp_path / "models"),
+            token=False,
+        )
+    assert existing.read_text(encoding="utf-8") == "existing"
+
+
+def test_download_selected_files_preflights_all_targets_before_copying(tmp_path, monkeypatch) -> None:
+    destination = tmp_path / "models" / "chat"
+    existing = destination / "second.gguf"
+    existing.parent.mkdir(parents=True)
+    existing.write_text("existing", encoding="utf-8")
+    cached = tmp_path / "cached.gguf"
+    cached.write_text("new", encoding="utf-8")
+    calls: list[str] = []
+
+    def fake_download(**kwargs):
+        calls.append(kwargs["filename"])
+        return str(cached)
+
+    monkeypatch.setattr("app.hf_service.hf_hub_download", fake_download)
+
+    with pytest.raises(FileExistsError):
+        download_selected_files(
+            "org/repo",
+            "main",
+            ["first.gguf", "second.gguf"],
+            str(destination),
+            str(tmp_path / "models"),
+            token=False,
+        )
+    assert calls == []
+    assert not (destination / "first.gguf").exists()
+    assert existing.read_text(encoding="utf-8") == "existing"
+
+
+def test_download_selected_files_preflights_parent_file_collisions(tmp_path, monkeypatch) -> None:
+    destination = tmp_path / "models" / "chat"
+    destination.mkdir(parents=True)
+    (destination / "blocked").write_text("regular-file", encoding="utf-8")
+    cached = tmp_path / "cached.gguf"
+    cached.write_text("new", encoding="utf-8")
+    calls: list[str] = []
+
+    def fake_download(**kwargs):
+        calls.append(kwargs["filename"])
+        return str(cached)
+
+    monkeypatch.setattr("app.hf_service.hf_hub_download", fake_download)
+
+    with pytest.raises(FileExistsError):
+        download_selected_files(
+            "org/repo",
+            "main",
+            ["first.gguf", "blocked/model.gguf"],
+            str(destination),
+            str(tmp_path / "models"),
+            token=False,
+        )
+    assert calls == []
+    assert not (destination / "first.gguf").exists()
+
+
+def test_download_selected_files_refuses_broken_symlink_target(tmp_path, monkeypatch) -> None:
+    destination = tmp_path / "models" / "chat"
+    destination.mkdir(parents=True)
+    (destination / "model.gguf").symlink_to(tmp_path / "missing-target.gguf")
+
+    def fake_download(**kwargs):
+        raise AssertionError("symlink targets should be rejected before download")
+
+    monkeypatch.setattr("app.hf_service.hf_hub_download", fake_download)
+
+    with pytest.raises(FileExistsError):
+        download_selected_files(
+            "org/repo",
+            "main",
+            ["model.gguf"],
+            str(destination),
+            str(tmp_path / "models"),
+            token=False,
+        )
+
+
+def test_download_job_records_container_dir_and_nested_container_files(tmp_path, monkeypatch) -> None:
     db = Database(tmp_path / "manager.db")
     db.init()
     settings = ManagerSettings(manager_model_root=str(tmp_path / "models"), llama_swap_model_root="/models")
+    release_download = threading.Event()
 
     def fake_download_selected_files(**kwargs):
-        target = tmp_path / "models" / "chat" / "tiny.gguf"
+        release_download.wait(timeout=5)
+        target = tmp_path / "models" / "chat" / "shards" / "tiny.gguf"
         target.parent.mkdir(parents=True)
         target.write_text("fake", encoding="utf-8")
         return [str(target)]
@@ -109,15 +282,19 @@ def test_download_job_records_written_and_container_files(tmp_path, monkeypatch)
     monkeypatch.setattr("app.downloads.download_selected_files", fake_download_selected_files)
     manager = DownloadManager(db, settings, run_in_process=False)
     job = manager.start(
-        DownloadRequest(repo_id="org/repo", files=["tiny.gguf"], destination_dir=str(tmp_path / "models" / "chat"))
+        DownloadRequest(repo_id="org/repo", files=["shards/tiny.gguf"], destination_dir=str(tmp_path / "models" / "chat"))
     )
-    manager._threads[job.id].join(timeout=5)
+    assert job.container_dir == "/models/chat"
+    thread = manager._threads[job.id]
+    release_download.set()
+    thread.join(timeout=5)
 
     completed = db.get_job(job.id)
     assert completed is not None
     assert completed.status == "completed"
-    assert completed.written_files == [str(tmp_path / "models" / "chat" / "tiny.gguf")]
-    assert completed.container_files == ["/models/chat/tiny.gguf"]
+    assert completed.written_files == [str(tmp_path / "models" / "chat" / "shards" / "tiny.gguf")]
+    assert completed.container_files == ["/models/chat/shards/tiny.gguf"]
+    assert job.id not in manager._threads
 
 
 def test_cancelled_download_does_not_become_completed_after_transfer(tmp_path, monkeypatch) -> None:

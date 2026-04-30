@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from .config_service import manager_to_llama_path, safe_join
 from .database import Database
 from .hf_service import HfFileInfo, download_selected_files, get_hf_file_info
 from .schemas import DownloadJob, DownloadRequest
@@ -46,6 +47,7 @@ class DownloadManager:
             revision=request.revision,
             files=request.files,
             destination_dir=request.destination_dir,
+            container_dir=self._container_dir_for_destination(request.destination_dir),
             logs=["queued download job"],
         )
         self.db.save_job(job)
@@ -87,6 +89,8 @@ class DownloadManager:
     def _recover_jobs(self) -> None:
         for job in self.db.list_jobs():
             if job.status == "queued":
+                if not job.container_dir:
+                    job.container_dir = self._container_dir_for_destination(job.destination_dir)
                 job.logs.append("resumed queued job after manager startup")
                 self.db.save_job(job)
                 self._start_thread(job.id)
@@ -104,11 +108,13 @@ class DownloadManager:
     def _run(self, job_id: str) -> None:
         job = self.db.get_job(job_id)
         if not job:
+            self._forget_job_tracking(job_id)
             return
         if job_id in self._cancelled:
             job.status = "cancelled"
             job.logs.append("cancelled before start")
             self.db.save_job(job)
+            self._forget_job_tracking(job_id)
             return
         acquired = self._semaphore.acquire(timeout=0)
         if not acquired:
@@ -116,6 +122,7 @@ class DownloadManager:
         job = self.db.get_job(job_id)
         if not job:
             self._semaphore.release()
+            self._forget_job_tracking(job_id)
             return
         try:
             if job_id in self._cancelled or job.status == "cancelled":
@@ -153,11 +160,8 @@ class DownloadManager:
             job.bytes_downloaded = job.bytes_total
             job.active_file = ""
             job.written_files = written
-            job.container_files = [
-                str(Path(self.settings.llama_swap_model_root) / Path(path).resolve().relative_to(Path(self.settings.manager_model_root).resolve()))
-                .replace("\\", "/")
-                for path in written
-            ]
+            job.container_dir = job.container_dir or self._container_dir_for_destination(job.destination_dir)
+            job.container_files = [manager_to_llama_path(path, self.settings) for path in written]
             job.logs.append(f"downloaded {len(written)} file(s)")
         except Exception as exc:
             if job_id in self._cancelled:
@@ -173,6 +177,21 @@ class DownloadManager:
         finally:
             self.db.save_job(job)
             self._semaphore.release()
+            self._forget_job_tracking(job_id)
+
+    def _container_dir_for_destination(self, destination_dir: str) -> str:
+        try:
+            destination = Path(destination_dir)
+            manager_path = destination if destination.is_absolute() else safe_join(self.settings.manager_model_root, destination_dir)
+            return manager_to_llama_path(str(manager_path), self.settings)
+        except ValueError:
+            return ""
+
+    def _forget_job_tracking(self, job_id: str) -> None:
+        with self._lock:
+            self._threads.pop(job_id, None)
+            self._processes.pop(job_id, None)
+        self._cancelled.discard(job_id)
 
     def _file_info(self, job: DownloadJob, token: str | None) -> list[HfFileInfo]:
         try:

@@ -11,6 +11,7 @@ ModelRole = Literal["reasoning", "chat", "vision", "coding", "aux"]
 MatrixBehavior = Literal["runs_alone", "with_support", "support", "custom"]
 SourceType = Literal["hf", "upload", "manual"]
 JobStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
+ModelFileKind = Literal["gguf", "gguf_part", "mmproj", "chat_template", "tokenizer", "other"]
 
 
 class GpuDevice(BaseModel):
@@ -61,7 +62,7 @@ class HfTokenRequest(BaseModel):
 
 class HfFile(BaseModel):
     path: str
-    kind: Literal["gguf", "gguf_part", "mmproj", "chat_template", "tokenizer", "other"]
+    kind: ModelFileKind
     selected: bool = False
     group: str = ""
 
@@ -109,6 +110,30 @@ class DownloadJob(BaseModel):
     error: str = ""
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+class CreateModelFromDownloadRequest(BaseModel):
+    id: str = ""
+    display_name: str = ""
+    role: ModelRole | None = None
+    aliases: list[str] = Field(default_factory=list)
+    ttl: int | None = None
+    gpu_devices: list[int] = Field(default_factory=list)
+    main_gpu: int | None = None
+    tensor_split: str = ""
+    matrix_key: str = ""
+    matrix_behavior: MatrixBehavior = "with_support"
+    matrix_expression: str = ""
+    evict_cost: int | None = None
+    startup_preload: bool = False
+
+
+class FileInventoryItem(BaseModel):
+    manager_path: str
+    container_path: str
+    relative_path: str
+    kind: ModelFileKind
+    size: int
 
 
 class ConfigPreviewRequest(BaseModel):

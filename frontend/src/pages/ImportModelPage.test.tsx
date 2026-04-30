@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../test/testUtils";
 import { ImportModelPage } from "./ImportModelPage";
@@ -42,6 +42,7 @@ const settingsPayload = {
 
 describe("ImportModelPage", () => {
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
   });
 
@@ -87,6 +88,162 @@ describe("ImportModelPage", () => {
     expect(within(row.closest("tr") as HTMLTableRowElement).getByText("42%")).toBeInTheDocument();
     expect(within(row.closest("tr") as HTMLTableRowElement).getByText("40 B / 100 B")).toBeInTheDocument();
     expect(within(row.closest("tr") as HTMLTableRowElement).getByText("model.gguf")).toBeInTheDocument();
+  });
+
+  it("installs a completed download as a managed model from the queue", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/settings")) return Promise.resolve(jsonResponse(settingsPayload));
+      if (url.endsWith("/api/gpus")) return Promise.resolve(jsonResponse([]));
+      if (url.endsWith("/api/downloads")) {
+        return Promise.resolve(
+          jsonResponse([
+            {
+              id: "job-1",
+              status: "completed",
+              repo_id: "org/repo",
+              revision: "main",
+              files: ["model.gguf"],
+              destination_dir: "/models/chat/repo",
+              container_dir: "/models/chat/repo",
+              written_files: ["/models/chat/repo/model.gguf"],
+              container_files: ["/models/chat/repo/model.gguf"],
+              progress: 100,
+              bytes_downloaded: 100,
+              bytes_total: 100,
+              active_file: "",
+              logs: ["downloaded 1 file(s)"],
+              error: "",
+            },
+          ]),
+        );
+      }
+      if (url.endsWith("/api/models/from-download/job-1")) {
+        expect(init?.method).toBe("POST");
+        return Promise.resolve(
+          jsonResponse({
+            id: "repo",
+            display_name: "repo",
+            role: "chat",
+            source_type: "hf",
+            hf_url: "https://huggingface.co/org/repo",
+            hf_revision: "main",
+            manager_files: ["/models/chat/repo/model.gguf"],
+            container_files: ["/models/chat/repo/model.gguf"],
+            primary_model_file: "/models/chat/repo/model.gguf",
+            mmproj_file: "",
+            chat_template_file: "",
+            tokenizer_files: [],
+            aliases: [],
+            ttl: 0,
+            gpu_devices: [],
+            main_gpu: null,
+            tensor_split: "",
+            llama_flags: {},
+            raw_cmd_override: "",
+            matrix_key: "repo",
+            matrix_behavior: "with_support",
+            matrix_expression: "",
+            evict_cost: null,
+            startup_preload: false,
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected fetch ${url}`));
+    });
+
+    renderWithProviders(<ImportModelPage />);
+
+    const installButton = await screen.findByRole("button", { name: "Install Model" });
+    expect(installButton).not.toBeDisabled();
+    fireEvent.click(installButton);
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/models/from-download/job-1",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+    await screen.findByText((_content, element) => element?.textContent === "Managed model repo created. Review it on the Models page.");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/models/from-download/job-1",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("lets backend infer role when installing a queue item without draft context", async () => {
+    let installBody: Record<string, unknown> | null = null;
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/settings")) return Promise.resolve(jsonResponse(settingsPayload));
+      if (url.endsWith("/api/gpus")) return Promise.resolve(jsonResponse([]));
+      if (url.endsWith("/api/downloads")) {
+        return Promise.resolve(
+          jsonResponse([
+            {
+              id: "vision-job",
+              status: "completed",
+              repo_id: "org/vision-repo",
+              revision: "main",
+              files: ["model.gguf"],
+              destination_dir: "/models/vision/vision-repo",
+              container_dir: "/models/vision/vision-repo",
+              written_files: ["/models/vision/vision-repo/model.gguf"],
+              container_files: ["/models/vision/vision-repo/model.gguf"],
+              progress: 100,
+              bytes_downloaded: 100,
+              bytes_total: 100,
+              active_file: "",
+              logs: ["downloaded 1 file(s)"],
+              error: "",
+            },
+          ]),
+        );
+      }
+      if (url.endsWith("/api/models/from-download/vision-job")) {
+        installBody = JSON.parse(String(init?.body));
+        return Promise.resolve(
+          jsonResponse({
+            id: "vision-repo",
+            display_name: "vision-repo",
+            role: "vision",
+            source_type: "hf",
+            hf_url: "https://huggingface.co/org/vision-repo",
+            hf_revision: "main",
+            manager_files: ["/models/vision/vision-repo/model.gguf"],
+            container_files: ["/models/vision/vision-repo/model.gguf"],
+            primary_model_file: "/models/vision/vision-repo/model.gguf",
+            mmproj_file: "",
+            chat_template_file: "",
+            tokenizer_files: [],
+            aliases: [],
+            ttl: 300,
+            gpu_devices: [],
+            main_gpu: null,
+            tensor_split: "",
+            llama_flags: {},
+            raw_cmd_override: "",
+            matrix_key: "visionr",
+            matrix_behavior: "with_support",
+            matrix_expression: "",
+            evict_cost: null,
+            startup_preload: false,
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected fetch ${url}`));
+    });
+
+    renderWithProviders(<ImportModelPage />);
+    fireEvent.change(await screen.findByLabelText("Desired name"), { target: { value: "stale-draft" } });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Install Model" }));
+
+    await waitFor(() => expect(installBody).not.toBeNull());
+    expect(installBody).not.toHaveProperty("role");
+    expect(installBody).not.toHaveProperty("ttl");
+    expect(installBody).not.toHaveProperty("id");
+    expect(installBody).not.toHaveProperty("display_name");
   });
 });
 

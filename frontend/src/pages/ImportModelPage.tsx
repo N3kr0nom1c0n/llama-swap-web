@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, FilePlus2, Link2, RotateCcw, Save, Upload, XCircle } from "lucide-react";
+import { Download, FileCheck2, FilePlus2, Link2, RotateCcw, Save, Upload, XCircle } from "lucide-react";
 import { useMemo, useState } from "react";
 import { api } from "../api";
 import { CodeBlock } from "../components/CodeBlock";
@@ -88,6 +88,20 @@ export function ImportModelPage() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.state });
     },
   });
+  const installModel = useMutation({
+    mutationFn: ({ downloadJob, includeDraftContext }: { downloadJob: DownloadJob; includeDraftContext: boolean }) =>
+      api.createModelFromDownload(downloadJob.id, modelFromDownloadPayload(includeDraftContext)),
+    onSuccess: (model) => {
+      setDraft(model);
+      setRole(model.role);
+      setGpuDevices(model.gpu_devices);
+      setHfUrl(model.hf_url);
+      setRevision(model.hf_revision);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.models });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.state });
+      void queryClient.invalidateQueries({ queryKey: ["downloads"] });
+    },
+  });
   const cancelJob = useMutation({
     mutationFn: api.cancelDownload,
     onSuccess: () => {
@@ -142,6 +156,31 @@ export function ImportModelPage() {
       container_files: containerFiles,
       primary_model_file: draft.primary_model_file || containerFiles.find((path) => path.toLowerCase().endsWith(".gguf")) || containerFiles[0] || "",
     });
+  }
+
+  function modelFromDownloadPayload(includeDraftContext: boolean) {
+    if (!includeDraftContext) {
+      return {};
+    }
+    const payload = {
+      id: draft.id,
+      display_name: draft.display_name || desiredName,
+      aliases: draft.aliases,
+      ttl: draft.id || draft.display_name ? draft.ttl : undefined,
+      gpu_devices: gpuDevices,
+      main_gpu: draft.main_gpu,
+      tensor_split: draft.tensor_split,
+      matrix_key: draft.matrix_key,
+      matrix_behavior: draft.matrix_behavior,
+      matrix_expression: draft.matrix_expression,
+      evict_cost: draft.evict_cost,
+      startup_preload: draft.startup_preload,
+    };
+    return { ...payload, role };
+  }
+
+  function installDownloadedModel(downloadJob: DownloadJob, includeDraftContext = false) {
+    installModel.mutate({ downloadJob, includeDraftContext });
   }
 
   return (
@@ -243,6 +282,14 @@ export function ImportModelPage() {
             <span style={{ width: `${Math.min(100, Math.max(0, job.data?.progress ?? 0))}%` }} />
           </div>
           <CodeBlock label="Job logs" value={job.data?.logs.join("\n") ?? ""} minRows={6} />
+          {job.data?.status === "completed" ? (
+            <div className="inline-actions">
+              <button className="button" type="button" disabled={installModel.isPending} onClick={() => installDownloadedModel(job.data as DownloadJob, true)}>
+                <FileCheck2 size={16} aria-hidden="true" />
+                Install Model
+              </button>
+            </div>
+          ) : null}
           {job.data?.error ? <p className="form-error">{job.data.error}</p> : null}
         </section>
       ) : null}
@@ -283,6 +330,10 @@ export function ImportModelPage() {
                       <button className="button secondary" type="button" disabled={!["failed", "cancelled"].includes(queuedJob.status)} onClick={() => retryJob.mutate(queuedJob.id)}>
                         <RotateCcw size={14} aria-hidden="true" />
                         Retry
+                      </button>
+                      <button className="button" type="button" disabled={queuedJob.status !== "completed" || installModel.isPending} onClick={() => installDownloadedModel(queuedJob)}>
+                        <FileCheck2 size={14} aria-hidden="true" />
+                        Install Model
                       </button>
                     </div>
                   </td>
@@ -334,6 +385,8 @@ export function ImportModelPage() {
         <CodeBlock label="Generated command preview" value={command} minRows={4} />
         {saveModel.error ? <p className="form-error">{saveModel.error.message}</p> : null}
         {saveModel.isSuccess ? <p className="form-success">Draft model saved. Review matrix and config preview next.</p> : null}
+        {installModel.error ? <p className="form-error">{installModel.error.message}</p> : null}
+        {installModel.data ? <p className="form-success">Managed model {installModel.data.id} created. Review it on the Models page.</p> : null}
       </section>
     </div>
   );

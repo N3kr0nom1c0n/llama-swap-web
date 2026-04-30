@@ -115,6 +115,22 @@ export interface DownloadJob {
   updated_at?: string | null;
 }
 
+export interface CreateModelFromDownloadPayload {
+  id?: string;
+  display_name?: string;
+  role?: ModelRole;
+  aliases?: string[];
+  ttl?: number;
+  gpu_devices?: number[];
+  main_gpu?: number | null;
+  tensor_split?: string;
+  matrix_key?: string;
+  matrix_behavior?: MatrixBehavior;
+  matrix_expression?: string;
+  evict_cost?: number | null;
+  startup_preload?: boolean;
+}
+
 export interface StateResponse {
   settings: ManagerSettings;
   gpus: GpuDevice[];

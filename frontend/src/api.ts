@@ -1,5 +1,6 @@
 import type {
   ApplyResponse,
+  CreateModelFromDownloadPayload,
   ConfigPreviewResponse,
   DownloadJob,
   GpuDevice,
@@ -64,6 +65,11 @@ export const api = {
   models: () => request<ManagedModel[]>("/api/models"),
   saveModel: (model: ManagedModel) =>
     request<ManagedModel>("/api/models", { method: "POST", body: JSON.stringify(normalizeModel(model)) }),
+  createModelFromDownload: (jobId: string, payload: CreateModelFromDownloadPayload) =>
+    request<ManagedModel>(`/api/models/from-download/${encodeURIComponent(jobId)}`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   previewConfig: (modelIds: string[] = []) =>
     request<ConfigPreviewResponse>("/api/config/preview", { method: "POST", body: JSON.stringify({ model_ids: modelIds }) }),
   applyConfig: (stageId: string) =>
