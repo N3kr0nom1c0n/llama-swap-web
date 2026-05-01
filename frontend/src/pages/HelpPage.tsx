@@ -1,90 +1,130 @@
-import { AlertTriangle, BookOpen, Gauge, Info, Search, Settings2 } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowRight,
+  BookOpen,
+  Cable,
+  Compass,
+  Cpu,
+  FileCode2,
+  Gauge,
+  Info,
+  ListChecks,
+  Search,
+  Settings2,
+  Workflow,
+} from "lucide-react";
 import { useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { PageHeader } from "../components/PageHeader";
-import { helpSections, type HelpSection, type HelpTopic } from "../helpContent";
+import {
+  glossaryTerms,
+  impactRows,
+  wikiSections,
+  type GlossaryTerm,
+  type ImpactRow,
+  type WikiArticle,
+  type WikiSection,
+  type WikiSetting,
+} from "../helpContent";
+
+type WikiSearch = {
+  sections: WikiSection[];
+  impactRows: ImpactRow[];
+  glossaryTerms: GlossaryTerm[];
+};
+
+const articleIndex = new Map(
+  wikiSections.flatMap((section) => section.articles.map((article) => [article.id, article.title] as const)),
+);
+const glossaryIndex = new Map(glossaryTerms.map((term) => [term.term.toLowerCase(), term]));
+const articleCount = wikiSections.reduce((count, section) => count + section.articles.length, 0);
 
 export function HelpPage() {
   const [query, setQuery] = useState("");
   const normalizedQuery = query.trim().toLowerCase();
-  const filteredSections = useMemo(() => filterSections(helpSections, normalizedQuery), [normalizedQuery]);
-  const topicCount = helpSections.reduce((count, section) => count + section.topics.length, 0);
-  const settingCount = helpSections.reduce(
-    (count, section) => count + section.topics.reduce((topicCount, topic) => topicCount + (topic.settings?.length ?? 0), 0),
-    0,
-  );
+  const filtered = useMemo(() => filterWiki(normalizedQuery), [normalizedQuery]);
+  const hasResults =
+    filtered.sections.length > 0 || filtered.impactRows.length > 0 || filtered.glossaryTerms.length > 0;
 
   return (
     <div className="page help-page">
       <PageHeader
-        title="Help"
-        description="A practical guide to operating Llama-Swap Manager on your LAN rig, from imports to GPU placement and config apply."
+        title="Manager Wiki"
+        description="A linked runbook for every page, workflow, setting, flag, and llama-swap term this app exposes."
       />
 
-      <section className="help-hero">
-        <div>
-          <span className="help-kicker">Rig operations manual</span>
-          <h2>Use the app without guessing what each control changes.</h2>
+      <section className="wiki-hero">
+        <div className="wiki-hero-copy">
+          <span className="wiki-kicker">LAN rig wiki</span>
+          <h2>Stop guessing what the control does before you move it.</h2>
           <p>
-            This help is written for both first-pass setup and power-user tuning. It explains what each app area does,
-            what the settings affect, and where a change shows up in generated llama-swap config.
+            This page is organized like an operator wiki: page guides, setting impact notes, runbooks, and glossary
+            entries that link back to the article where the term matters.
           </p>
         </div>
-        <div className="help-hero-metrics" aria-label="Help coverage">
-          <div>
-            <BookOpen size={18} aria-hidden="true" />
-            <strong>{topicCount}</strong>
-            <span>topics</span>
-          </div>
-          <div>
-            <Settings2 size={18} aria-hidden="true" />
-            <strong>{settingCount}</strong>
-            <span>settings</span>
-          </div>
-          <div>
-            <Gauge size={18} aria-hidden="true" />
-            <strong>current</strong>
-            <span>app scope</span>
-          </div>
+        <div className="wiki-hero-map" aria-label="Wiki coverage">
+          <Metric icon={<BookOpen size={18} aria-hidden="true" />} value={articleCount} label="articles" />
+          <Metric icon={<Gauge size={18} aria-hidden="true" />} value={impactRows.length} label="impact rows" />
+          <Metric icon={<Settings2 size={18} aria-hidden="true" />} value={glossaryTerms.length} label="terms" />
         </div>
       </section>
 
-      <section className="help-search-panel">
-        <label className="help-search">
+      <section className="wiki-search-panel">
+        <label className="wiki-search">
           <Search size={17} aria-hidden="true" />
-          <span className="sr-only">Search help</span>
+          <span className="sr-only">Search wiki</span>
           <input
             type="search"
-            aria-label="Search help"
+            aria-label="Search wiki"
             value={query}
-            placeholder="Search settings, flags, pages, GPU terms..."
+            placeholder="Search pages, settings, flags, workflows, or glossary terms..."
             onChange={(event) => setQuery(event.target.value)}
           />
         </label>
-        <div className="help-source-note">
+        <div className="wiki-search-meta">
           <Info size={16} aria-hidden="true" />
-          <span>Built for the current app, matrix config, and your /models Docker layout.</span>
+          <span>{normalizedQuery ? "Filtering articles, impact rows, and glossary." : "Current app scope, matrix config, /models Docker layout."}</span>
         </div>
       </section>
 
-      <div className="help-layout">
-        <aside className="help-rail" aria-label="Help sections">
-          {filteredSections.map((section) => (
-            <a key={section.id} href={`#${section.id}`}>
-              <span>{section.eyebrow}</span>
-              {section.title}
+      <div className="wiki-layout">
+        <aside className="wiki-rail" aria-label="Wiki navigation">
+          <nav>
+            <a href="#wiki-impact">
+              <Gauge size={16} aria-hidden="true" />
+              Settings Impact
             </a>
-          ))}
+            {filtered.sections.map((section) => (
+              <a key={section.id} href={`#${section.id}`}>
+                {sectionIcon(section.id)}
+                <span>
+                  <small>{section.eyebrow}</small>
+                  {section.title}
+                </span>
+              </a>
+            ))}
+            <a href="#wiki-glossary">
+              <BookOpen size={16} aria-hidden="true" />
+              Glossary
+            </a>
+          </nav>
         </aside>
 
-        <div className="help-results" data-testid="help-results">
-          {filteredSections.length ? (
-            filteredSections.map((section) => <HelpSectionView key={section.id} section={section} />)
+        <div className="wiki-results" data-testid="help-results">
+          {hasResults ? (
+            <>
+              <ImpactMatrix rows={filtered.impactRows} query={normalizedQuery} />
+              {filtered.sections.map((section) => (
+                <WikiSectionView key={section.id} section={section} />
+              ))}
+              <Glossary terms={filtered.glossaryTerms} query={normalizedQuery} />
+            </>
           ) : (
             <section className="panel empty-state">
               <Search size={18} aria-hidden="true" />
               <div>
-                <strong>No help topics matched.</strong>
-                <p>Try searching for a page name, llama.cpp flag, path setting, or GPU term.</p>
+                <strong>No wiki results matched.</strong>
+                <p>Try a page name, llama.cpp flag, path setting, GPU term, or failure state.</p>
               </div>
             </section>
           )}
@@ -94,63 +134,196 @@ export function HelpPage() {
   );
 }
 
-function HelpSectionView({ section }: { section: HelpSection }) {
+function Metric({ icon, value, label }: { icon: ReactNode; value: number; label: string }) {
   return (
-    <section id={section.id} className="help-section">
-      <div className="help-section-header">
-        <span>{section.eyebrow}</span>
+    <div>
+      {icon}
+      <strong>{value}</strong>
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function ImpactMatrix({ rows, query }: { rows: ImpactRow[]; query: string }) {
+  if (query && rows.length === 0) return null;
+
+  return (
+    <section id="wiki-impact" className="wiki-impact-section">
+      <div className="wiki-section-title">
+        <span className="wiki-kicker">Fast answers</span>
+        <h2>Settings Impact Matrix</h2>
+        <p>Use this when you know the control but need the tradeoff before changing it.</p>
+      </div>
+      <div className="wiki-impact-table" role="table" aria-label="Settings impact matrix">
+        <div className="wiki-impact-head" role="row">
+          <span role="columnheader">Setting</span>
+          <span role="columnheader">If you change X</span>
+          <span role="columnheader">It can net you Y</span>
+          <span role="columnheader">Cost</span>
+          <span role="columnheader">Where</span>
+        </div>
+        {rows.map((row) => (
+          <a key={row.id} className="wiki-impact-row" href={`#${row.articleId}`} role="row">
+            <strong role="cell">{row.setting}</strong>
+            <span role="cell">{row.change}</span>
+            <span role="cell">{row.canNet}</span>
+            <span role="cell">{row.cost}</span>
+            <span role="cell">{row.where}</span>
+          </a>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function WikiSectionView({ section }: { section: WikiSection }) {
+  return (
+    <section id={section.id} className="wiki-section">
+      <div className="wiki-section-title">
+        <span className="wiki-kicker">{section.eyebrow}</span>
         <h2>{section.title}</h2>
         <p>{section.description}</p>
       </div>
-      <div className="help-topic-grid">
-        {section.topics.map((topic) => (
-          <article key={topic.id} id={topic.id} className="help-topic">
-            <div className="help-topic-head">
-              <h3>{topic.title}</h3>
-              <p>{topic.summary}</p>
-            </div>
-            {topic.body.map((paragraph) => (
-              <p key={paragraph}>{paragraph}</p>
+      <div className="wiki-article-list">
+        {section.articles.map((article) => (
+          <WikiArticleView key={article.id} article={article} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function WikiArticleView({ article }: { article: WikiArticle }) {
+  return (
+    <article id={article.id} className="wiki-article">
+      <header className="wiki-article-head">
+        <div>
+          <span>{article.category}</span>
+          <h3>{article.title}</h3>
+          <p>{article.summary}</p>
+        </div>
+        <a className="wiki-anchor-link" href={`#${article.id}`} aria-label={`Link to ${article.title}`}>
+          #
+        </a>
+      </header>
+
+      <div className="wiki-prose">
+        {article.details.map((paragraph) => (
+          <p key={paragraph}>{paragraph}</p>
+        ))}
+      </div>
+
+      {article.workflow?.length ? (
+        <div className="wiki-workflow">
+          <div className="wiki-block-label">
+            <Workflow size={16} aria-hidden="true" />
+            Workflow
+          </div>
+          <ol>
+            {article.workflow.map((step) => (
+              <li key={step}>{step}</li>
             ))}
-            {topic.settings?.length ? (
-              <div className="help-setting-list">
-                {topic.settings.map((setting) => (
-                  <div key={setting.name} className="help-setting-card">
-                    <h4>{setting.name}</h4>
-                    <dl>
-                      <dt>For</dt>
-                      <dd>{setting.purpose}</dd>
-                      <dt>Effect</dt>
-                      <dd>{setting.effect}</dd>
-                      {setting.guidance ? (
-                        <>
-                          <dt>Use it</dt>
-                          <dd>{setting.guidance}</dd>
-                        </>
-                      ) : null}
-                    </dl>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-            {topic.examples?.length ? (
-              <div className="help-example">
-                <strong>Examples</strong>
-                {topic.examples.map((example) => (
-                  <code key={example}>{example}</code>
-                ))}
-              </div>
-            ) : null}
-            {topic.warnings?.length ? (
-              <div className="help-warning">
-                <AlertTriangle size={16} aria-hidden="true" />
-                <div>
-                  {topic.warnings.map((warning) => (
-                    <p key={warning}>{warning}</p>
-                  ))}
-                </div>
-              </div>
-            ) : null}
+          </ol>
+        </div>
+      ) : null}
+
+      {article.settings?.length ? <SettingsGrid settings={article.settings} /> : null}
+
+      {article.examples?.length ? (
+        <div className="wiki-examples">
+          <div className="wiki-block-label">
+            <FileCode2 size={16} aria-hidden="true" />
+            Examples
+          </div>
+          {article.examples.map((example) => (
+            <code key={example}>{example}</code>
+          ))}
+        </div>
+      ) : null}
+
+      {article.warnings?.length ? (
+        <div className="wiki-warning">
+          <AlertTriangle size={16} aria-hidden="true" />
+          <div>
+            {article.warnings.map((warning) => (
+              <p key={warning}>{warning}</p>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <footer className="wiki-article-footer">
+        {article.relatedTerms?.length ? (
+          <div>
+            <span>Terms</span>
+            <div className="wiki-chip-list">
+              {article.relatedTerms.map((term) => (
+                <GlossaryChip key={term} term={term} />
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {article.relatedArticles?.length ? (
+          <div>
+            <span>Related</span>
+            <div className="wiki-chip-list">
+              {article.relatedArticles.map((articleId) => (
+                <a key={articleId} href={`#${articleId}`}>
+                  {articleIndex.get(articleId) ?? articleId}
+                </a>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </footer>
+    </article>
+  );
+}
+
+function SettingsGrid({ settings }: { settings: WikiSetting[] }) {
+  return (
+    <div className="wiki-settings-grid">
+      {settings.map((setting) => (
+        <div key={setting.name} className="wiki-setting">
+          <h4>{setting.name}</h4>
+          <dl>
+            <dt>For</dt>
+            <dd>{setting.purpose}</dd>
+            <dt>If changed</dt>
+            <dd>{setting.ifYouChange}</dd>
+            <dt>Cost</dt>
+            <dd>{setting.tradeoff}</dd>
+            <dt>Where</dt>
+            <dd>{setting.where}</dd>
+          </dl>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Glossary({ terms, query }: { terms: GlossaryTerm[]; query: string }) {
+  if (query && terms.length === 0) return null;
+
+  return (
+    <section id="wiki-glossary" className="wiki-glossary-section">
+      <div className="wiki-section-title">
+        <span className="wiki-kicker">Linked definitions</span>
+        <h2>Glossary</h2>
+        <p>Every term links back to the article where changing that thing matters.</p>
+      </div>
+      <div className="wiki-glossary-grid">
+        {terms.map((term) => (
+          <article key={term.slug} id={`term-${term.slug}`} data-testid={`glossary-${term.slug}`} className="wiki-term">
+            <div>
+              <h3>{term.term}</h3>
+              <p>{term.shortDefinition}</p>
+            </div>
+            <p>{term.details}</p>
+            <a href={`#${term.articleId}`}>
+              Read article
+              <ArrowRight size={14} aria-hidden="true" />
+            </a>
           </article>
         ))}
       </div>
@@ -158,28 +331,82 @@ function HelpSectionView({ section }: { section: HelpSection }) {
   );
 }
 
-function filterSections(sections: HelpSection[], query: string): HelpSection[] {
-  if (!query) return sections;
-  return sections
-    .map((section) => {
-      const sectionMatches = searchable([section.title, section.eyebrow, section.description]).includes(query);
-      const topics = section.topics.filter((topic) => sectionMatches || topicMatches(topic, query));
-      return topics.length ? { ...section, topics } : null;
-    })
-    .filter((section): section is HelpSection => Boolean(section));
+function GlossaryChip({ term }: { term: string }) {
+  const glossaryTerm = glossaryIndex.get(term.toLowerCase());
+
+  return <a href={glossaryTerm ? `#${glossaryTerm.articleId}` : `#term-${slugify(term)}`}>{term}</a>;
 }
 
-function topicMatches(topic: HelpTopic, query: string): boolean {
+function filterWiki(query: string): WikiSearch {
+  if (!query) {
+    return {
+      sections: wikiSections,
+      impactRows,
+      glossaryTerms,
+    };
+  }
+
+  const sections = wikiSections
+    .map((section) => {
+      const sectionMatches = searchable([section.title, section.eyebrow, section.description]).includes(query);
+      const articles = section.articles.filter((article) => sectionMatches || articleMatches(article, query));
+      return articles.length ? { ...section, articles } : null;
+    })
+    .filter((section): section is WikiSection => Boolean(section));
+
+  return {
+    sections,
+    impactRows: impactRows.filter((row) =>
+      searchable([row.setting, row.change, row.canNet, row.cost, row.where, articleIndex.get(row.articleId) ?? ""]).includes(
+        query,
+      ),
+    ),
+    glossaryTerms: glossaryTerms.filter((term) =>
+      searchable([
+        term.term,
+        term.shortDefinition,
+        term.details,
+        articleIndex.get(term.articleId) ?? "",
+        ...(term.relatedTerms ?? []),
+      ]).includes(query),
+    ),
+  };
+}
+
+function articleMatches(article: WikiArticle, query: string): boolean {
   return searchable([
-    topic.title,
-    topic.summary,
-    ...topic.body,
-    ...(topic.examples ?? []),
-    ...(topic.warnings ?? []),
-    ...(topic.settings ?? []).flatMap((setting) => [setting.name, setting.purpose, setting.effect, setting.guidance ?? ""]),
+    article.title,
+    article.category,
+    article.summary,
+    ...article.details,
+    ...(article.workflow ?? []),
+    ...(article.examples ?? []),
+    ...(article.warnings ?? []),
+    ...(article.relatedTerms ?? []),
+    ...(article.relatedArticles ?? []).map((articleId) => articleIndex.get(articleId) ?? articleId),
+    ...(article.tags ?? []),
+    ...(article.settings ?? []).flatMap((setting) => [
+      setting.name,
+      setting.purpose,
+      setting.ifYouChange,
+      setting.tradeoff,
+      setting.where,
+    ]),
   ]).includes(query);
 }
 
 function searchable(values: string[]): string {
   return values.join(" ").toLowerCase();
+}
+
+function slugify(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+}
+
+function sectionIcon(sectionId: string) {
+  if (sectionId === "start-here") return <Compass size={16} aria-hidden="true" />;
+  if (sectionId === "page-guides") return <ListChecks size={16} aria-hidden="true" />;
+  if (sectionId === "settings-flags") return <Settings2 size={16} aria-hidden="true" />;
+  if (sectionId === "runbooks") return <Cable size={16} aria-hidden="true" />;
+  return <Cpu size={16} aria-hidden="true" />;
 }

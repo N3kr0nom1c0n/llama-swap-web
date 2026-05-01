@@ -1,625 +1,1029 @@
-export interface HelpSetting {
+export interface WikiSetting {
   name: string;
   purpose: string;
-  effect: string;
-  guidance?: string;
+  ifYouChange: string;
+  tradeoff: string;
+  where: string;
 }
 
-export interface HelpTopic {
+export interface WikiArticle {
   id: string;
   title: string;
+  category: string;
   summary: string;
-  body: string[];
-  settings?: HelpSetting[];
+  details: string[];
+  workflow?: string[];
+  settings?: WikiSetting[];
   examples?: string[];
   warnings?: string[];
+  relatedTerms?: string[];
+  relatedArticles?: string[];
+  tags?: string[];
 }
 
-export interface HelpSection {
+export interface WikiSection {
   id: string;
   title: string;
   eyebrow: string;
   description: string;
-  topics: HelpTopic[];
+  articles: WikiArticle[];
 }
 
-export const helpSections: HelpSection[] = [
+export interface ImpactRow {
+  id: string;
+  setting: string;
+  change: string;
+  canNet: string;
+  cost: string;
+  where: string;
+  articleId: string;
+}
+
+export interface GlossaryTerm {
+  term: string;
+  slug: string;
+  shortDefinition: string;
+  details: string;
+  articleId: string;
+  relatedTerms?: string[];
+}
+
+export const wikiSections: WikiSection[] = [
   {
-    id: "orientation",
-    title: "How The Manager Works",
-    eyebrow: "Workflow",
-    description: "The app stages model files, builds llama-server commands, previews llama-swap YAML, backs up the existing config, and applies changes only when you approve them.",
-    topics: [
+    id: "start-here",
+    title: "Start Here",
+    eyebrow: "Operator model",
+    description:
+      "How Llama-Swap Manager turns model files into a usable llama-swap entry without hiding the dangerous steps.",
+    articles: [
       {
-        id: "staged-flow",
-        title: "Staged workflow",
-        summary: "Nothing should silently rewrite llama-swap. The manager keeps import, download, preview, backup, and apply as separate steps.",
-        body: [
-          "Use Import Model to resolve Hugging Face files or upload local files. Use Models to refine the model entry. Use Config Preview to inspect generated YAML and diff before applying it.",
-          "Applying config creates a timestamped backup in /backups before writing /app/config.yaml. The manager does not restart llama-swap automatically as part of apply; restart manually or use the optional Config Preview restart button after you explicitly enable Docker socket access.",
-          "Generated commands should use the container model path /models/... because llama-swap runs inside Docker. Host paths such as /home/n3kr0/Repos/llama.cpp/models are only used by Docker volume mounts and the manager's write path.",
+        id: "article-staged-pipeline",
+        title: "Staged Model Pipeline",
+        category: "Workflow",
+        summary:
+          "A model is not installed just because a file finished downloading. The manager walks it through source, files, download, managed model, config preview, apply, and optional restart.",
+        details: [
+          "The app is designed to close the gap between 'I downloaded a GGUF' and 'llama-swap can actually serve it'. A completed download only proves the bytes landed under /models. A managed model entry is what gives the file a model name, role, command flags, GPU placement, matrix behavior, aliases, and TTL.",
+          "The config step is intentionally staged. Config Preview renders YAML, validates known constraints, and shows a diff. Apply creates a backup first and writes /app/config.yaml only after you approve the staged preview.",
+          "The restart step is separate from apply. If restart controls are enabled, Config Preview can restart the configured llama-swap Docker container after the config is written. If restart controls are disabled, restart llama-swap outside the manager.",
+        ],
+        workflow: [
+          "Choose a source in Import Model: Hugging Face URL, local upload, or scan existing /models files.",
+          "Select the primary GGUF and companion files, then download or stage them under the correct role directory.",
+          "Create a managed model entry from the finished download or scanned file.",
+          "Review command flags, GPU placement, aliases, TTL, and matrix behavior on Models.",
+          "Preview YAML, check the diff, apply with backup, then restart llama-swap if you want the new config live.",
         ],
         examples: [
-          "Rig model root mounted into manager: /models",
-          "llama-swap config inside manager: /app/config.yaml",
-          "Backups path inside manager: /backups",
+          "Downloaded file path: /models/chat/model-name/model.Q4_K_M.gguf",
+          "Generated command path: /models/chat/model-name/model.Q4_K_M.gguf",
+          "Managed model name: the ID clients request through llama-swap",
         ],
         warnings: [
-          "Do not point generated llama-server commands at host-only paths. The llama-swap container will not be able to read them.",
-          "Docker socket access is disabled by default. Only enable restart controls if the manager is on a trusted LAN and the socket mount is intentional.",
+          "A completed download that is not connected to a managed model will not appear in generated config.",
+          "Generated llama-server commands must use container-visible /models paths, not host paths from the Docker bind mount.",
         ],
+        relatedTerms: ["GGUF", "managed model", "config preview", "matrix", "restart control"],
+        relatedArticles: ["article-import-model", "article-models-page", "article-config-preview"],
+        tags: ["pipeline", "download", "installed", "apply", "restart"],
       },
       {
-        id: "matrix-overview",
-        title: "Matrix behavior",
-        summary: "Matrix is the current llama-swap concurrency model. It describes which models are allowed to run together.",
-        body: [
-          "The manager generates matrix vars and sets instead of legacy groups. A matrix var is a short key for a model ID. A matrix set describes valid combinations using expressions such as a, a & b, or a | b.",
-          "A model that runs alone should be isolated in matrix logic. A support model can stay available beside larger chat or reasoning models. Evict cost tells llama-swap which running models are more expensive to unload.",
-          "For your multi-GPU rig, matrix behavior is where you express operational intent: big reasoning models may evict other large models, while embeddings or rerankers can remain persistent if VRAM allows.",
-        ],
-        settings: [
-          {
-            name: "Matrix key",
-            purpose: "Short model identifier used by matrix vars.",
-            effect: "The key appears in matrix expressions. Short keys keep the generated YAML readable.",
-            guidance: "Use stable, memorable keys such as q27, g20, emb, or rr. Avoid aliases here; matrix vars should point to real model IDs.",
-          },
-          {
-            name: "Matrix behavior",
-            purpose: "Chooses the default concurrency pattern for the model.",
-            effect: "A runs-alone model is isolated. A support model is intended to coexist. A with-support model can run beside support entries.",
-            guidance: "Use support for rerankers and embeddings, runs-alone for models that consume most VRAM, and custom when the generated expression is not specific enough.",
-          },
-          {
-            name: "Evict cost",
-            purpose: "Relative cost of stopping this model.",
-            effect: "Higher values make llama-swap prefer keeping the model running when choosing what to evict.",
-            guidance: "Give slow-loading or always-needed models a higher value. Leave ordinary models blank or low.",
-          },
-        ],
-      },
-    ],
-  },
-  {
-    id: "pages",
-    title: "Using Each Page",
-    eyebrow: "Navigation",
-    description: "Each page owns one stage of the workflow so you can inspect state before changing files or config.",
-    topics: [
-      {
-        id: "dashboard",
-        title: "Dashboard",
-        summary: "The action board for config writability, active downloads, failed jobs, and model setup blockers.",
-        body: [
-          "Use Dashboard first after a deploy. It shows whether /app/config.yaml exists and is writable, how many managed models exist, and what action is blocking a model from becoming usable.",
-          "Next Actions replaces raw download history. It surfaces active downloads, failed or cancelled downloads, completed downloads that are not connected to a managed model, and config path problems.",
-          "Use Finish setup on a downloaded-but-not-configured item to jump straight to Import Model with that job highlighted.",
-          "If config is not writable, Config Preview can still render YAML, but Apply Config will fail. Check the compose mount for /home/n3kr0/Repos/llama-swap/config.yaml:/app/config.yaml.",
-        ],
-      },
-      {
-        id: "import-model",
-        title: "Import Model",
-        summary: "The guided path from HF URL, upload, or existing file scan to managed model and config preview.",
-        body: [
-          "The pipeline strip shows the current stage: Source, Files, Download, Managed Model, and Config. The goal is to keep the next required action visible instead of making you jump between pages and copy paths.",
-          "Paste a Hugging Face repo or file URL, choose a role, optionally set a desired name, then Resolve Files. The manager classifies GGUF files, multipart shards, mmproj files, chat templates, and tokenizer-like files.",
-          "Preview Destination shows where the selected files will land. Start Download creates a background job that writes into a per-model directory under /models/<role>/<model-id>/, which is the same model root llama-swap sees.",
-          "Ready Downloads lists completed jobs whose files are not referenced by a managed model yet. Create Managed Model lets the backend infer the role, primary GGUF, companion files, TTL, and default flags from the job.",
-          "Scan Existing Files searches /models for GGUF and companion files already on disk. Use Create model on a scanned GGUF when you downloaded or copied files outside the manager.",
-          "The Download Queue is the detailed history and control surface. It shows status, progress, bytes, active file, destination, written/container paths, cancel, retry, create, and Clear Finished.",
-        ],
-        warnings: [
-          "For multipart GGUF models, select every shard needed by the model. A future validation pass will enforce this more strongly.",
-          "HF token is required for private or gated repos. Save it in Settings before resolving those repositories.",
-        ],
-      },
-      {
-        id: "models",
-        title: "Models",
-        summary: "The detailed editor for llama-swap model entries and llama-server command generation.",
-        body: [
-          "Use Models when you need full control over model files, GPU selection, llama.cpp flags, aliases, TTL, matrix behavior, and raw command overrides.",
-          "The generated command preview is the command that will be written into config.yaml unless Raw command override is set. Structured fields are safer because the manager can validate and map paths.",
-          "Use raw override only when you need flags or command layout the builder cannot represent yet. Raw override gives you power but bypasses some guardrails.",
-        ],
-      },
-      {
-        id: "gpu-planner",
-        title: "GPU Planner",
-        summary: "Inventory CUDA devices and document how each card should be used.",
-        body: [
-          "The planner stores CUDA index, GPU name, VRAM, role, and notes. Model entries use CUDA indexes to generate CUDA_VISIBLE_DEVICES and related placement fields.",
-          "For your rig, typical examples are 3090 cards for large/reasoning/coding models and smaller cards for aux, embedding, reranker, or vision support workloads.",
-          "Use Detect GPUs when the manager can reach nvidia-smi. If detection is unavailable, keep the manual inventory accurate and treat saved GPU rows as the planning source of truth.",
-        ],
-        settings: [
-          {
-            name: "CUDA index",
-            purpose: "The device number used by CUDA_VISIBLE_DEVICES and llama.cpp GPU placement.",
-            effect: "Wrong indexes can put a model on the wrong GPU or fail to load if VRAM is insufficient.",
-            guidance: "Match nvidia-smi ordering on the rig. Keep notes when cards are reserved for specific roles.",
-          },
-          {
-            name: "VRAM GB",
-            purpose: "Documents the memory available on the card.",
-            effect: "The app currently uses this for planning context, not automatic scheduling.",
-            guidance: "Record usable VRAM conservatively. Large context and KV cache can consume a lot beyond the model weights.",
-          },
-        ],
-      },
-      {
-        id: "config-preview",
-        title: "Config Preview",
-        summary: "Generate YAML, inspect the diff, validate known constraints, and apply with backup.",
-        body: [
-          "Config Preview renders the full config.yaml content from saved model entries. It also shows a unified diff against the current mounted config file.",
-          "Apply Config writes only a staged preview. If model entries change after preview, regenerate before applying. This prevents applying a config you did not inspect.",
-          "The Backups section lists safe config backups created by apply or restore. Restoring a backup first backs up the current config, then replaces the active config with the selected backup.",
-          "After apply, restart llama-swap manually or use the llama-swap Runtime panel if restart controls are enabled. Config apply and restart remain separate actions.",
-          "The llama-swap Runtime panel checks the configured Docker socket and container name. The restart button stays disabled if the socket is missing, the container is unavailable, or Settings has restart control disabled.",
-        ],
-        warnings: [
-          "Never apply a config if validation errors remain.",
-          "Backups are created first, but a bad config can still stop llama-swap from loading models until corrected or restored.",
-          "Restore also requires a llama-swap restart before the restored config is used.",
-        ],
-      },
-      {
-        id: "settings",
-        title: "Settings",
-        summary: "Global paths, defaults, Hugging Face token handling, optional restart controls, role directories, and command defaults.",
-        body: [
-          "Settings controls the assumptions used by every other page. Path settings affect where files are written and how commands are generated. Defaults affect newly created model entries and generated commands.",
-          "The Hugging Face token is stored in the manager env file and is never returned by the API. The UI only shows whether a token exists and where it is stored.",
-          "llama-swap Restart Control is an explicit opt-in. Enabling it does not restart anything by itself; it only allows the Config Preview page to call Docker for the configured container when you click the restart button.",
-        ],
-      },
-    ],
-  },
-  {
-    id: "settings-reference",
-    title: "Settings Reference",
-    eyebrow: "Field Guide",
-    description: "What each Settings field is for, what it changes, and how it affects model import or runtime behavior.",
-    topics: [
-      {
-        id: "runtime-settings",
-        title: "Runtime settings",
-        summary: "Host, port, download behavior, disk safety, and the base llama-server command.",
-        body: [
-          "These settings control the manager process and the default command builder. Some require a container restart to affect the running manager process itself, but saved values still affect generated model entries.",
-        ],
-        settings: [
-          {
-            name: "App host",
-            purpose: "Bind address used by FastAPI inside the container.",
-            effect: "0.0.0.0 listens on all container interfaces and is what you want for LAN access through Docker port mapping.",
-            guidance: "Leave this at 0.0.0.0 in Docker. Restrict exposure with firewall or compose ports, not by changing this to localhost inside the container.",
-          },
-          {
-            name: "App port",
-            purpose: "Internal FastAPI port.",
-            effect: "Must match the compose port target. Your current LAN URL maps 8081:8081.",
-            guidance: "Change only if another process inside the manager container needs that port.",
-          },
-          {
-            name: "Default HF revision",
-            purpose: "Revision used when an import does not specify one.",
-            effect: "Usually main. Pinning a branch, tag, or commit can make downloads reproducible.",
-            guidance: "Use main for normal browsing; use a commit hash when you want exact repeatability.",
-          },
-          {
-            name: "Max parallel downloads",
-            purpose: "Limits simultaneous Hugging Face transfer jobs.",
-            effect: "Higher values can saturate disk and network. Very large GGUF downloads can compete with each other.",
-            guidance: "Keep at 1 for huge model files unless you have a reason to parallelize smaller support files.",
-          },
-          {
-            name: "Disk safety GB",
-            purpose: "Minimum free-space cushion before config operations and future download checks.",
-            effect: "Protects the model disk from filling completely.",
-            guidance: "Use a larger number on the model volume if you download many 20GB to 80GB files.",
-          },
-          {
-            name: "llama-server command",
-            purpose: "Base executable used by generated commands.",
-            effect: "Every structured model command starts with this value plus --port ${PORT}.",
-            guidance: "For llama-swap's CUDA image this is usually /app/llama-server. Change only if your runtime image puts llama-server elsewhere.",
-          },
-        ],
-      },
-      {
-        id: "hf-settings",
-        title: "Hugging Face token",
-        summary: "Credentials for private or gated model downloads.",
-        body: [
-          "Save Token writes HF_TOKEN into the configured env file. Clear Token removes it. The manager uses the token for file listing, metadata lookup, and downloads.",
-          "The token is not shown back to the browser. If it is configured, the UI shows a status badge and token source path.",
-        ],
-        settings: [
-          {
-            name: "HF API token",
-            purpose: "Allows access to private, gated, or rate-limited Hugging Face repositories.",
-            effect: "Resolve Files and Start Download can authenticate directly from the rig, avoiding browser-mediated downloads.",
-            guidance: "Use a read token. Rotate it from Hugging Face if it is exposed.",
-          },
-          {
-            name: "Token source",
-            purpose: "Shows where the manager found the token.",
-            effect: "Usually /app/.env, mounted from /home/n3kr0/Repos/llama.web/.env.",
-            guidance: "If this says environment, the token came from container env rather than the editable manager env file.",
-          },
-        ],
-      },
-      {
-        id: "restart-control-settings",
-        title: "llama-swap restart control",
-        summary: "Optional Docker socket integration for a manual restart button.",
-        body: [
-          "Restart control is disabled by default because the Docker socket can control containers on the host. It should only be enabled in a trusted LAN deployment where the manager container intentionally mounts /var/run/docker.sock.",
-          "When enabled, Config Preview shows the llama-swap Runtime panel. The panel checks whether the Docker socket exists, whether the configured container can be inspected, and whether the container is running.",
-          "This does not change config apply behavior. Apply still backs up and writes config first; restart remains a separate button press.",
-          "On an existing install, the values saved in Settings are what the backend uses. .env values only seed the first database initialization.",
-          "Because the manager runs as a non-root user, compose needs a group_add entry using the group id of /var/run/docker.sock or the socket will be mounted but unreadable.",
-        ],
-        settings: [
-          {
-            name: "Enable llama-swap restart control",
-            purpose: "Turns on Docker socket status checks and the manual restart button.",
-            effect: "Config Preview can restart the configured container after you click Restart llama-swap.",
-            guidance: "Leave disabled unless compose mounts /var/run/docker.sock and the manager stays LAN-only.",
-          },
-          {
-            name: "llama-swap container name",
-            purpose: "Docker container name to inspect and restart.",
-            effect: "If this does not match the live container, the runtime panel shows unavailable and restart stays disabled.",
-            guidance: "Use llama-swap for your current compose setup.",
-          },
-          {
-            name: "Docker socket path",
-            purpose: "Unix socket path inside the manager container.",
-            effect: "The backend uses this socket for Docker inspect and restart calls.",
-            guidance: "Use /var/run/docker.sock when compose mounts the host socket there.",
-          },
-          {
-            name: "Restart timeout seconds",
-            purpose: "Timeout passed to Docker restart.",
-            effect: "Docker waits this many seconds for graceful shutdown before force-stopping the container.",
-            guidance: "30 seconds is a reasonable default. Increase it if llama-swap needs longer to exit cleanly.",
-          },
-        ],
-        warnings: [
-          "A Docker socket mount is effectively host-level Docker control. Do not expose this app outside your trusted LAN without an external auth layer.",
-        ],
-      },
-      {
-        id: "path-settings",
-        title: "Path settings",
-        summary: "Container and manager paths used for downloads, config writes, backups, and SQLite state.",
-        body: [
-          "The path settings are the difference between where the manager writes files and what llama-swap should see in config.yaml. In your current Docker setup they are intentionally the same inside the container: /models.",
+        id: "article-container-paths",
+        title: "Container Paths Versus Host Paths",
+        category: "Architecture",
+        summary:
+          "The manager writes into mounted container paths, and llama-swap config must reference paths that the llama-swap container can also see.",
+        details: [
+          "Docker bind mounts create two names for the same storage: the host path and the in-container path. The manager should write to /models because that is what the manager container sees. Generated llama-swap commands should also use /models because that is what the llama-swap container sees.",
+          "The host path is still important for Compose. It decides which real disk backs /models, /backups, /data, and /app/config.yaml. It should not leak into generated llama-server commands unless llama-swap also sees that same host path inside its container.",
+          "Config apply writes /app/config.yaml from inside the manager container. A file bind mount can be writable even when the /app directory itself is not writable, so the app validates the target file and falls back to backup-dir temporary writes when needed.",
         ],
         settings: [
           {
             name: "Manager model root",
-            purpose: "Path where the manager writes downloaded or uploaded files.",
-            effect: "Downloads are constrained under this root to prevent path traversal.",
-            guidance: "In the container this should be /models, backed by /home/n3kr0/Repos/llama.cpp/models on the host.",
+            purpose: "Where the manager writes imported files inside its own container.",
+            ifYouChange: "Changing it moves future writes and scans to a different container path.",
+            tradeoff: "If it does not point at the mounted model volume, downloads can land somewhere llama-swap cannot read.",
+            where: "Settings -> Paths",
           },
           {
             name: "Llama-swap model root",
-            purpose: "Path that generated llama-swap commands should use.",
-            effect: "The command builder maps manager paths to this root so config.yaml is valid inside llama-swap.",
-            guidance: "Keep this /models if llama-swap also mounts the model directory as /models.",
+            purpose: "The path emitted into generated llama-server commands.",
+            ifYouChange: "Generated -m, --mmproj, and --chat-template-file paths change.",
+            tradeoff: "Wrong values produce valid-looking YAML that fails at model load time.",
+            where: "Settings -> Paths",
           },
           {
             name: "Config path",
-            purpose: "Mounted config.yaml file the manager previews and writes.",
-            effect: "Apply Config writes this file after creating a backup.",
-            guidance: "Current target is /app/config.yaml inside the manager, mounted from /home/n3kr0/Repos/llama-swap/config.yaml.",
+            purpose: "The mounted config.yaml file the manager previews, backs up, writes, and restores.",
+            ifYouChange: "Config Preview and Apply target a different file.",
+            tradeoff: "Pointing at a non-llama-swap file makes apply useless or dangerous.",
+            where: "Settings -> Paths",
           },
+        ],
+        examples: [
+          "Host mount: /mnt/models/llama.swap/models:/models",
+          "Config mount: /home/n3kr0/Repos/llama-swap/config.yaml:/app/config.yaml",
+          "Backup mount: /mnt/data_hoard/llama-swap/backups:/backups",
+        ],
+        relatedTerms: ["bind mount", "model root", "backup", "config preview"],
+        relatedArticles: ["article-path-settings", "article-config-preview"],
+        tags: ["paths", "docker", "mounts", "config"],
+      },
+      {
+        id: "article-matrix",
+        title: "Matrix Concurrency",
+        category: "llama-swap",
+        summary:
+          "Matrix is how current llama-swap expresses which models can run together. The manager emits matrix config, not legacy groups.",
+        details: [
+          "A matrix var is a short key for a model. A matrix set is an expression that tells llama-swap which vars are allowed together. For example, a support model can stay up with a chat model, while a huge reasoning model may run alone.",
+          "Use matrix behavior to encode intent instead of manually remembering what can fit. Large models can be isolated, support models can be persistent, and mixed sets can describe combinations that make sense on your GPUs.",
+          "Evict cost is a hint about which models are expensive to unload. Higher-cost models are better candidates to keep loaded when llama-swap needs to choose what to stop.",
+        ],
+        settings: [
+          {
+            name: "Matrix key",
+            purpose: "Short key used in matrix vars and set expressions.",
+            ifYouChange: "The YAML expression names change, but the model name clients call can stay the same.",
+            tradeoff: "Unclear keys make the generated config harder to reason about.",
+            where: "Models -> Matrix",
+          },
+          {
+            name: "Matrix behavior",
+            purpose: "Default pattern for whether a model runs alone, acts as support, or runs with support.",
+            ifYouChange: "llama-swap may allow or prevent different model combinations.",
+            tradeoff: "Too permissive can overcommit VRAM; too strict wastes available GPUs.",
+            where: "Models -> Matrix",
+          },
+          {
+            name: "Evict cost",
+            purpose: "Relative cost of unloading the model.",
+            ifYouChange: "llama-swap eviction decisions can favor keeping high-cost models warm.",
+            tradeoff: "Overusing high costs makes eviction less useful because everything looks expensive.",
+            where: "Models -> Matrix",
+          },
+        ],
+        relatedTerms: ["matrix", "support model", "evict cost", "TTL"],
+        relatedArticles: ["article-models-page", "article-gpu-placement"],
+        tags: ["matrix", "groups", "concurrency", "eviction"],
+      },
+    ],
+  },
+  {
+    id: "page-guides",
+    title: "Page Guides",
+    eyebrow: "Navigation",
+    description:
+      "What each page is for, what actions belong there, and what state should move to the next step.",
+    articles: [
+      {
+        id: "article-dashboard",
+        title: "Dashboard",
+        category: "Page",
+        summary:
+          "The dashboard should be the triage board: current API state, config writability, active or failed work, and next actions that need attention.",
+        details: [
+          "Use the dashboard after a deploy or after long-running work. It should tell you whether the manager can write config, how many managed models exist, and which jobs or models need follow-up.",
+          "Download history by itself is not the main purpose of this page. The useful signal is whether a completed download still needs a managed model, whether a failed job needs retry, or whether config apply is blocked.",
+          "If the dashboard says a model is not configured, treat that as a workflow state: go to Import Model or Models to connect files to a managed model entry, then go to Config Preview.",
+        ],
+        relatedTerms: ["managed model", "download job", "config preview"],
+        relatedArticles: ["article-staged-pipeline", "article-import-model"],
+        tags: ["dashboard", "jobs", "next actions"],
+      },
+      {
+        id: "article-import-model",
+        title: "Import Model Workflow",
+        category: "Page",
+        summary:
+          "Import Model is the pipeline from Hugging Face URL, uploaded file, or existing disk scan to a managed model entry.",
+        details: [
+          "Paste a Hugging Face repo or file URL, choose the role, optionally set the desired llama-swap name, then resolve files. The manager classifies GGUFs, multipart shards, mmproj files, chat templates, and tokenizer-like companion files.",
+          "Preview Destination explains where selected files will land before the download starts. The target is based on role directory plus a safe folder name.",
+          "A completed download should expose Create Managed Model. That action connects the written files to a model entry, infers the primary GGUF and companion files, and seeds defaults for TTL, context, cache, GPU flags, and matrix behavior.",
+          "Scan Existing Files is for files already copied into /models. It should let you create the same managed model entry without re-downloading the file.",
+        ],
+        workflow: [
+          "Resolve a Hugging Face URL or scan /models.",
+          "Select the primary GGUF and required companions.",
+          "Start the download and watch the progress row until it reaches completed.",
+          "Create the managed model from the completed job.",
+          "Open Config Preview and verify that the generated command points at the downloaded files.",
+        ],
+        warnings: [
+          "For multipart GGUFs, all shards belong together. The first shard usually appears in the -m path, but the model needs the other shards on disk.",
+          "Private or gated repositories need the Hugging Face token saved first.",
+        ],
+        relatedTerms: ["HF token", "GGUF", "multipart GGUF", "mmproj", "chat template"],
+        relatedArticles: ["article-hf-token", "article-files-companions", "article-models-page"],
+        tags: ["import", "hugging face", "download", "scan", "upload"],
+      },
+      {
+        id: "article-models-page",
+        title: "Models Page",
+        category: "Page",
+        summary:
+          "Models is where an imported file becomes a llama-swap model: name, files, command, GPU placement, aliases, TTL, and matrix behavior.",
+        details: [
+          "The Models page is not just inventory. It is the command builder and config-entry editor. A model listed here is a candidate for generated config.yaml.",
+          "Structured fields are preferred because the manager can validate paths, insert ${PORT}, map container paths, and keep YAML consistent. Raw command override is for expert cases where the builder cannot express the needed llama.cpp flags yet.",
+          "Aliases affect what clients can call. TTL affects how long the model stays loaded after use. GPU placement affects CUDA_VISIBLE_DEVICES, main GPU, tensor split, and n-gpu-layers.",
+        ],
+        settings: [
+          {
+            name: "Aliases",
+            purpose: "Friendly names clients can request through llama-swap.",
+            ifYouChange: "Clients can call the same model by additional names.",
+            tradeoff: "Too many aliases can make model lists confusing if names overlap.",
+            where: "Models -> Identity",
+          },
+          {
+            name: "Raw command override",
+            purpose: "Full manual command text instead of generated structured command.",
+            ifYouChange: "The manager stops building the command from structured fields for that model.",
+            tradeoff: "More control, less validation. You must include ${PORT} and correct paths yourself.",
+            where: "Models -> Advanced command",
+          },
+        ],
+        relatedTerms: ["managed model", "alias", "raw command", "TTL", "CUDA_VISIBLE_DEVICES"],
+        relatedArticles: ["article-command-builder", "article-gpu-placement", "article-matrix"],
+        tags: ["models", "editor", "command", "aliases"],
+      },
+      {
+        id: "article-gpu-planner",
+        title: "GPU Planner",
+        category: "Page",
+        summary:
+          "GPU Planner is the rig inventory and placement notebook. It records CUDA indexes, VRAM, roles, and notes so model setup stops being guesswork.",
+        details: [
+          "CUDA indexes are what llama.cpp and CUDA_VISIBLE_DEVICES use. Keep them aligned with nvidia-smi on the actual rig. If the physical cards change, update the planner before tuning model entries.",
+          "VRAM is planning context, not a guarantee. Model size, quantization, ctx-size, KV cache precision, batch sizes, and tensor split all affect whether a model actually loads.",
+          "Use roles to reserve cards mentally: large/reasoning/coding on high-VRAM cards, aux and always-on support on smaller or isolated cards, and vision models on cards that also have room for mmproj and image tokens.",
+        ],
+        relatedTerms: ["CUDA index", "VRAM", "CUDA_VISIBLE_DEVICES", "tensor split", "main GPU"],
+        relatedArticles: ["article-gpu-placement", "article-context-kv-cache"],
+        tags: ["gpu planner", "cuda", "vram", "nvidia-smi"],
+      },
+      {
+        id: "article-config-preview",
+        title: "Config Preview And Apply",
+        category: "Page",
+        summary:
+          "Config Preview turns managed models into YAML, validates it, shows a diff, creates backups, applies changes, restores backups, and optionally restarts llama-swap.",
+        details: [
+          "Preview generates the config from current settings and saved model entries. It should show both the YAML and the unified diff against the mounted config file.",
+          "Apply should write only the staged preview you inspected. If you change a model after preview, regenerate the preview before applying.",
+          "Every apply creates a timestamped backup first. Restore also backs up the current config before replacing it with the selected backup.",
+          "The llama-swap Runtime panel only works when restart controls are enabled and the Docker socket mount can inspect the configured container.",
+        ],
+        warnings: [
+          "A config backup does not make a bad config harmless. llama-swap still needs a restart or reload before it sees the new file, and a bad file can prevent model loading until fixed or restored.",
+          "Docker socket access is host-level control. Keep it LAN-only and intentional.",
+        ],
+        relatedTerms: ["config preview", "backup", "restart control", "Docker socket", "validation"],
+        relatedArticles: ["article-restart-control", "article-config-rollback"],
+        tags: ["config", "apply", "diff", "backup", "restore", "restart"],
+      },
+      {
+        id: "article-settings-page",
+        title: "Settings Page",
+        category: "Page",
+        summary:
+          "Settings controls app-wide assumptions: paths, defaults, token handling, role directories, command defaults, disk safety, and optional restart behavior.",
+        details: [
+          "Settings values seed new imports and command generation. Changing a default does not automatically rewrite existing model entries unless a specific page does that intentionally.",
+          "Path settings are high-impact because they decide where bytes land and what paths are written into llama-swap config. Token settings affect Hugging Face resolution and downloads. Preset settings affect new model commands.",
+          "Restart settings are intentionally separate from model settings because they grant the manager Docker socket access. Enable them only when the container has the socket mounted and the app is protected by your LAN trust boundary.",
+        ],
+        relatedTerms: ["HF token", "model root", "role directory", "restart control", "disk safety"],
+        relatedArticles: ["article-path-settings", "article-default-presets", "article-restart-control"],
+        tags: ["settings", "defaults", "paths", "token"],
+      },
+    ],
+  },
+  {
+    id: "settings-flags",
+    title: "Settings And Flags",
+    eyebrow: "What changes what",
+    description:
+      "Reference articles for the settings and llama.cpp flags that change storage, load behavior, speed, VRAM, or output shape.",
+    articles: [
+      {
+        id: "article-path-settings",
+        title: "Path Settings",
+        category: "Settings",
+        summary:
+          "Path settings control where the manager writes, where llama-swap reads, where config is applied, where backups live, and where persistent state survives rebuilds.",
+        details: [
+          "Keep manager paths inside the container. The Compose file maps those container paths to host storage. That keeps generated config portable across the manager and llama-swap containers.",
+          "The safest default is /models for both manager model root and llama-swap model root when both containers mount the same model volume at /models. Use /backups for backups and /data for SQLite state.",
+          "Use /data/tmp for temporary work when possible. Binding host /tmp into a long-running manager container can make cleanup and permissions less predictable.",
+        ],
+        settings: [
           {
             name: "Backups dir",
-            purpose: "Directory for timestamped config backups.",
-            effect: "Every apply stores the previous config before writing the new one.",
-            guidance: "Use durable storage such as /mnt/data_hoard/llama-swap/backups mounted to /backups.",
-          },
-          {
-            name: "Download temp dir",
-            purpose: "Temporary workspace path for downloads and uploads.",
-            effect: "Large operations may touch this path depending on download behavior.",
-            guidance: "Use a path backed by enough disk space. The recommended container path is /data/tmp; do not bind-mount host /tmp into the manager.",
+            purpose: "Where config backups and restore safety copies are written.",
+            ifYouChange: "Future apply and restore backups go to the new directory.",
+            tradeoff: "If the directory is not durable, rebuilds can lose your rollback path.",
+            where: "Settings -> Paths",
           },
           {
             name: "Data dir",
-            purpose: "Persistent manager data directory.",
-            effect: "SQLite state lives here unless MANAGER_DB_PATH overrides it.",
-            guidance: "Keep it mounted as /data so settings, jobs, and model entries survive container recreates.",
+            purpose: "Persistent manager state, including SQLite.",
+            ifYouChange: "The app can look like a fresh install if it points at an empty data volume.",
+            tradeoff: "Changing without migrating manager.db can hide saved jobs, settings, and models.",
+            where: "Settings -> Paths",
+          },
+          {
+            name: "Download temp dir",
+            purpose: "Temporary workspace for large transfers and file staging.",
+            ifYouChange: "Temporary files and future cache-related work move to that location.",
+            tradeoff: "Low-space temp storage can break downloads even when /models has room.",
+            where: "Settings -> Paths",
           },
         ],
+        relatedTerms: ["bind mount", "backup", "SQLite", "model root"],
+        relatedArticles: ["article-container-paths"],
+        tags: ["paths", "settings", "storage"],
       },
       {
-        id: "role-directories",
-        title: "Role directories",
-        summary: "Default destination directories for imported models by purpose.",
-        body: [
-          "Role directories decide where new files land and how model entries are organized. They should stay under the llama-swap model root.",
-          "The current roles are reasoning, chat, vision, coding, and aux. Use aux for embeddings, rerankers, small classifiers, and other support models.",
+        id: "article-hf-token",
+        title: "Hugging Face Token",
+        category: "Settings",
+        summary:
+          "The HF token lets the rig resolve and download private, gated, or rate-limited model files directly from Hugging Face.",
+        details: [
+          "Save Token writes HF_TOKEN to the manager env file or configured token source. The API never returns the token value back to the browser; the UI only shows whether a token exists.",
+          "Use a read-only Hugging Face token. It is enough for listing and downloading model files. If you rotate the token on Hugging Face, update it here before resolving gated repos again.",
+          "If Resolve Files works for public repos but not private ones, check token status first. If token status is present, the next likely issue is repo permission or a gated model license that has not been accepted.",
         ],
         settings: [
           {
-            name: "reasoning",
-            purpose: "Large or slow deliberate models.",
-            effect: "New reasoning imports default to /models/reasoning.",
-            guidance: "Use for GPT-OSS 120B style models or Qwen reasoning models.",
+            name: "HF API token",
+            purpose: "Credential for Hugging Face API and downloads.",
+            ifYouChange: "New resolve and download requests authenticate with the new token.",
+            tradeoff: "A bad token fails private imports; an overpowered token increases blast radius if leaked.",
+            where: "Settings -> Hugging Face",
           },
           {
-            name: "chat",
-            purpose: "Primary general conversation models.",
-            effect: "New chat imports default to /models/chat.",
-            guidance: "Use for models intended to answer most normal prompts.",
-          },
-          {
-            name: "vision",
-            purpose: "Multimodal models and mmproj support files.",
-            effect: "Vision imports default to /models/vision.",
-            guidance: "Keep mmproj files and chat templates near the model they belong to.",
-          },
-          {
-            name: "coding",
-            purpose: "Code and technical models.",
-            effect: "Coding imports default to /models/coding.",
-            guidance: "Use for Qwen Coder, DeepSeek Coder, and similar models.",
-          },
-          {
-            name: "aux",
-            purpose: "Support models.",
-            effect: "Aux imports default to /models/aux.",
-            guidance: "Use for embeddings, rerankers, and small always-on models.",
+            name: "Default HF revision",
+            purpose: "Branch, tag, or commit used when a URL does not specify a revision.",
+            ifYouChange: "Future imports can resolve a different snapshot of the same repo.",
+            tradeoff: "main is convenient; commit hashes are more reproducible.",
+            where: "Settings -> Downloads",
           },
         ],
+        relatedTerms: ["HF token", "revision", "gated repo"],
+        relatedArticles: ["article-import-model", "article-private-repo"],
+        tags: ["hugging face", "hf", "token", "private", "gated"],
       },
       {
-        id: "default-presets",
-        title: "Default presets",
-        summary: "Values copied into new model entries and used by generated commands when a model does not override them.",
-        body: [
-          "Defaults are not magic scheduler rules. They seed new model entries and fill missing command flags. Changing a default does not rewrite existing saved models unless you edit those models.",
+        id: "article-default-presets",
+        title: "Default Presets",
+        category: "Settings",
+        summary:
+          "Defaults seed new model entries. They do not automatically retune existing models unless you edit those model records.",
+        details: [
+          "Defaults are the starting point for role-based model creation. Reasoning might use a longer TTL, chat might stay loaded, vision might use image token defaults, and aux models may be persistent.",
+          "The highest-impact defaults are ctx-size, cache-type-k, cache-type-v, flash-attn, jinja, no-mmap, and role TTLs. These influence whether a new model loads and how useful it is once loaded.",
+          "Treat defaults as safe baselines. After the model entry exists, tune the specific model on Models rather than changing global defaults repeatedly.",
         ],
         settings: [
           {
-            name: "TTL reasoning, chat, vision, aux",
-            purpose: "Default unload timeout in seconds by role.",
-            effect: "ttl: 0 keeps a model loaded indefinitely. Higher values unload after inactivity.",
-            guidance: "Use 0 for support models you always want hot. Use 300-600 for large models that should unload after use.",
+            name: "Role TTL defaults",
+            purpose: "Initial ttl value for new models by role.",
+            ifYouChange: "New entries stay loaded longer, unload sooner, or never unload depending on the role.",
+            tradeoff: "Long TTLs reduce reload waits but keep VRAM occupied.",
+            where: "Settings -> Model defaults",
           },
           {
-            name: "ctx-size",
-            purpose: "Default context window token limit.",
-            effect: "Larger context windows consume more KV cache memory and can reduce how many models fit in VRAM.",
-            guidance: "Increase for long-code or long-document work. Lower it if the model fails to load or VRAM pressure is high.",
+            name: "Default ctx-size",
+            purpose: "Initial context window size for new model commands.",
+            ifYouChange: "New models can accept longer or shorter prompt history by default.",
+            tradeoff: "Bigger context consumes more KV cache and can prevent large models from loading.",
+            where: "Settings -> Command defaults",
           },
           {
-            name: "cache-type-k and cache-type-v",
-            purpose: "KV cache quantization types for keys and values.",
-            effect: "Lower precision reduces memory usage, often with some quality or stability tradeoff.",
-            guidance: "q4_0 is a practical large-context default. Use higher precision if quality matters more than context length or VRAM headroom.",
-          },
-          {
-            name: "flash-attn",
-            purpose: "Enables llama.cpp flash attention when supported.",
-            effect: "Can improve memory use and speed on supported GPUs and models.",
-            guidance: "Keep on unless a model/backend combination fails with it.",
-          },
-          {
-            name: "jinja",
-            purpose: "Enables Jinja chat template handling.",
-            effect: "Helps models use their expected chat formatting, especially newer Qwen-family models.",
-            guidance: "Keep enabled for chat and instruct models unless a specific model requires a different template path.",
-          },
-          {
-            name: "no-mmap",
-            purpose: "Avoids memory-mapping model weights.",
-            effect: "Can reduce file-backed mmap behavior and make large Docker/GPU loads more predictable.",
-            guidance: "Keep enabled for your large GPU rig unless you intentionally want mmap behavior.",
+            name: "Default cache types",
+            purpose: "Initial KV cache quantization for new commands.",
+            ifYouChange: "New models use more or less VRAM for long contexts.",
+            tradeoff: "Lower precision saves memory; higher precision can preserve quality or stability.",
+            where: "Settings -> Command defaults",
           },
         ],
-      },
-    ],
-  },
-  {
-    id: "model-controls",
-    title: "Model Controls And llama.cpp Flags",
-    eyebrow: "Tuning",
-    description: "The fields that most directly affect load behavior, VRAM use, throughput, sampling, and generated answers.",
-    topics: [
-      {
-        id: "files-and-templates",
-        title: "Files, templates, and aliases",
-        summary: "These fields tell llama-server which files to load and how clients see the model.",
-        body: [
-          "Primary model file is the main GGUF passed to -m. MMProj file is the vision projector for multimodal models. Chat template file points llama.cpp at a specific template when the model needs one.",
-          "Aliases let clients request friendly names while the actual model ID remains stable. Include aliases in llama-swap's model list if your config enables that globally.",
-        ],
+        relatedTerms: ["TTL", "ctx-size", "KV cache", "cache-type-k", "cache-type-v"],
+        relatedArticles: ["article-context-kv-cache"],
+        tags: ["defaults", "ttl", "ctx-size", "cache"],
       },
       {
-        id: "gpu-placement",
-        title: "GPU placement",
-        summary: "CUDA devices, main GPU, tensor split, and GPU layers decide where work and weights land.",
-        body: [
-          "CUDA devices become CUDA_VISIBLE_DEVICES. This limits which physical cards the model process can see. Main GPU selects the primary visible device for llama.cpp placement. Tensor split divides tensor work across visible GPUs.",
-          "n-gpu-layers controls how much of the model is offloaded to GPU. Very high values such as 999 are commonly used to request full offload when possible.",
+        id: "article-context-kv-cache",
+        title: "Context And KV Cache",
+        category: "Tuning",
+        summary:
+          "ctx-size decides how much text the model can consider. KV cache settings decide how much memory that context costs.",
+        details: [
+          "ctx-size is the maximum token window for prompt plus generated context. Increasing it can net longer prompts and documents, bigger codebases, and longer multi-turn memory inside one request.",
+          "The cost is KV cache memory. Every active sequence needs cache space, so context size combines with parallel and cache precision. A huge ctx-size with parallel > 1 can multiply memory use quickly.",
+          "cache-type-k and cache-type-v set quantization for the key and value cache. q4_0 is a practical large-context choice because it reduces VRAM pressure. Higher precision may be useful when quality or stability matters more than context length.",
+          "keep and context-shift affect how the server behaves once the context window fills. keep protects initial prompt tokens, while context-shift allows rolling forward instead of failing immediately.",
         ],
         settings: [
           {
-            name: "CUDA devices",
-            purpose: "Selects the GPU indexes visible to a model process.",
-            effect: "Controls isolation and prevents one model from grabbing every card.",
-            guidance: "For a 2x 3090 model, use 0,1. For a support model on a smaller card, assign only that card.",
+            name: "--ctx-size",
+            purpose: "Maximum token context window.",
+            ifYouChange: "Increase ctx-size to net longer prompts and documents; decrease it to reclaim VRAM.",
+            tradeoff: "Large context can block model load or reduce how many models fit at once.",
+            where: "Models -> Context",
           },
           {
-            name: "Main GPU",
-            purpose: "Primary GPU index inside the visible CUDA device set.",
-            effect: "Influences where llama.cpp anchors buffers and work.",
-            guidance: "Usually use the first visible device unless you have a placement reason.",
+            name: "--cache-type-k / --cache-type-v",
+            purpose: "Precision of KV cache tensors.",
+            ifYouChange: "Lower precision saves memory, often enabling bigger context or more models.",
+            tradeoff: "Very low precision can affect quality, stability, or model-specific behavior.",
+            where: "Models -> Context",
           },
           {
-            name: "Tensor split",
-            purpose: "Ratio for splitting model tensors across visible GPUs.",
-            effect: "Bad splits can overload one GPU while another has free VRAM.",
-            guidance: "For equal 24GB cards use 1,1. For mixed VRAM, weight the split toward larger cards.",
-          },
-          {
-            name: "n-gpu-layers",
-            purpose: "Number of model layers to place on GPU.",
-            effect: "More layers on GPU usually means faster inference but higher VRAM use.",
-            guidance: "Use 999 for full offload attempts. Lower it when a model does not fit.",
+            name: "--parallel",
+            purpose: "Number of concurrent request slots.",
+            ifYouChange: "Higher values can serve overlapping requests.",
+            tradeoff: "Each slot needs context/KV memory, which can destroy VRAM headroom on large models.",
+            where: "Models -> Throughput",
           },
         ],
+        relatedTerms: ["ctx-size", "KV cache", "parallel", "cache-type-k", "cache-type-v", "keep"],
+        relatedArticles: ["article-throughput", "article-model-load-fails"],
+        tags: ["ctx-size", "context", "kv cache", "cache", "vram"],
       },
       {
-        id: "throughput-flags",
-        title: "Throughput flags",
-        summary: "Batching and parallelism affect speed, latency, and memory pressure.",
-        body: [
-          "parallel controls simultaneous request slots in llama-server. batch-size and ubatch-size control token processing batches. Larger values can improve throughput but increase memory pressure.",
-          "For single-user LAN work, parallel 1 is often simpler. Increase only when you expect overlapping clients or tools.",
+        id: "article-gpu-placement",
+        title: "GPU Placement",
+        category: "Tuning",
+        summary:
+          "CUDA devices, main GPU, tensor split, and n-gpu-layers decide where llama.cpp sees GPUs and how the model is split across them.",
+        details: [
+          "CUDA devices becomes CUDA_VISIBLE_DEVICES. It limits which physical cards the model process can see. This is the first and most important isolation control.",
+          "main-gpu is the primary visible GPU for llama.cpp placement. Tensor split divides model tensors across visible GPUs. For equal VRAM cards, 1,1 is a simple split. For mixed cards, bias the split toward larger cards.",
+          "n-gpu-layers controls how much of the model is offloaded to GPU. 999 is commonly used as 'offload everything you can'. Lower it when a model cannot fit but you are willing to trade speed for memory.",
         ],
         settings: [
           {
-            name: "parallel",
-            purpose: "Number of parallel sequences/request slots.",
-            effect: "Higher values can serve concurrent requests but consume more KV cache.",
-            guidance: "Use 1 for huge models. Use 2+ for small support services if needed.",
+            name: "CUDA_VISIBLE_DEVICES",
+            purpose: "Limits the model process to selected CUDA indexes.",
+            ifYouChange: "The model moves to different physical GPUs or stops seeing some GPUs.",
+            tradeoff: "Wrong indexes can starve a model or collide with another workload.",
+            where: "Models -> GPU",
           },
           {
-            name: "batch-size",
+            name: "--tensor-split",
+            purpose: "Weighting for splitting tensors across visible GPUs.",
+            ifYouChange: "Better split can net successful loads and better VRAM balance.",
+            tradeoff: "Bad split overloads one card while another sits underused.",
+            where: "Models -> GPU",
+          },
+          {
+            name: "--main-gpu",
+            purpose: "Primary visible GPU used by llama.cpp.",
+            ifYouChange: "Buffers and primary work can shift to another visible card.",
+            tradeoff: "Usually leave it as the first visible card unless you know why it should move.",
+            where: "Models -> GPU",
+          },
+          {
+            name: "--n-gpu-layers",
+            purpose: "Number of layers to offload to GPU.",
+            ifYouChange: "More layers usually net faster inference; fewer layers reduce VRAM demand.",
+            tradeoff: "Lower values can push work to CPU and slow generation heavily.",
+            where: "Models -> GPU",
+          },
+        ],
+        relatedTerms: ["CUDA_VISIBLE_DEVICES", "tensor split", "main GPU", "n-gpu-layers", "VRAM"],
+        relatedArticles: ["article-gpu-planner", "article-model-load-fails"],
+        tags: ["gpu", "tensor split", "cuda", "main gpu", "n-gpu-layers"],
+      },
+      {
+        id: "article-throughput",
+        title: "Throughput And Batching",
+        category: "Tuning",
+        summary:
+          "batch-size, ubatch-size, parallel, and continuous batching tune prompt ingestion speed and concurrent work.",
+        details: [
+          "batch-size controls the logical prompt processing batch. ubatch-size controls how that batch is chunked internally. Larger values can increase prompt ingestion speed but cost memory.",
+          "If a model loads but fails or stalls during large prompts, lower ubatch-size before lowering ctx-size. If the model fails during load, ctx-size, cache type, tensor split, and n-gpu-layers are usually more likely.",
+          "parallel is useful for small support services and multi-client setups. On huge models, parallel 1 is often the correct default because each extra slot consumes KV cache.",
+        ],
+        settings: [
+          {
+            name: "--batch-size",
             purpose: "Logical prompt processing batch size.",
-            effect: "Can improve prompt ingestion speed at the cost of memory.",
-            guidance: "4096 is common for large GPU rigs. Reduce if loading or prompt processing fails.",
+            ifYouChange: "Higher values can net faster prompt ingestion.",
+            tradeoff: "More memory pressure during prompt processing.",
+            where: "Models -> Throughput",
           },
           {
-            name: "ubatch-size",
+            name: "--ubatch-size",
             purpose: "Physical micro-batch size.",
-            effect: "Controls how batch work is chunked internally.",
-            guidance: "Lower this before lowering batch-size when memory pressure appears during prompt ingestion.",
+            ifYouChange: "Lower values can get a model through memory pressure without shrinking context.",
+            tradeoff: "Lower values can reduce throughput.",
+            where: "Models -> Throughput",
+          },
+          {
+            name: "--cont-batching",
+            purpose: "Allows continuous batching behavior in llama-server.",
+            ifYouChange: "Can improve utilization under multiple requests.",
+            tradeoff: "Adds scheduling complexity and is less important for single-user huge-model usage.",
+            where: "Models -> Advanced flags",
           },
         ],
+        relatedTerms: ["batch-size", "ubatch-size", "parallel", "cont-batching"],
+        relatedArticles: ["article-context-kv-cache"],
+        tags: ["batch", "ubatch", "throughput", "parallel"],
       },
       {
-        id: "sampling-flags",
-        title: "Sampling and answer shape",
-        summary: "Temperature, top-p, top-k, min-p, and penalties influence token choice after the model has loaded.",
-        body: [
-          "These settings do not usually affect load VRAM like ctx-size or GPU flags do. They affect the distribution of generated tokens and therefore style, creativity, repetition, and determinism.",
+        id: "article-sampling",
+        title: "Sampling And Answer Shape",
+        category: "Tuning",
+        summary:
+          "Temperature, top-p, top-k, min-p, and penalties change answer style after the model has loaded.",
+        details: [
+          "Sampling settings generally do not decide whether a model fits in VRAM. They decide which tokens are likely after the model computes logits.",
+          "Lower temperature usually nets more deterministic answers. Higher temperature nets more variety but more risk. top-p and top-k constrain the candidate pool. min-p trims low-probability tail tokens.",
+          "presence-penalty and repeat-penalty can reduce repetition loops, but aggressive values can make coding and factual answers worse.",
         ],
         settings: [
           {
-            name: "temp",
+            name: "--temp",
             purpose: "Randomness of token selection.",
-            effect: "Higher values are more varied; lower values are more deterministic.",
-            guidance: "Use lower values for factual or coding tasks. Use higher values for brainstorming.",
+            ifYouChange: "Lower temp can net consistency; higher temp can net creative variation.",
+            tradeoff: "Too high becomes erratic; too low can feel rigid.",
+            where: "Models -> Sampling",
           },
           {
-            name: "top-p",
-            purpose: "Nucleus sampling cutoff.",
-            effect: "Limits sampling to the smallest token set whose probability mass reaches top-p.",
-            guidance: "0.9 to 0.95 is common. 1.0 disables this cutoff.",
+            name: "--top-p / --top-k / --min-p",
+            purpose: "Sampling cutoffs that constrain candidate tokens.",
+            ifYouChange: "You can make responses tighter or more open-ended.",
+            tradeoff: "Bad combinations can make output bland, unstable, or model-hostile.",
+            where: "Models -> Sampling",
           },
           {
-            name: "top-k",
-            purpose: "Maximum number of candidate tokens considered.",
-            effect: "Lower values constrain output more strongly.",
-            guidance: "Use 0 only when the model or preset expects no top-k restriction.",
-          },
-          {
-            name: "min-p",
-            purpose: "Filters tokens below a probability threshold relative to the best token.",
-            effect: "Can remove low-quality tail choices while preserving variety.",
-            guidance: "Use cautiously; start at 0 or model-recommended values.",
-          },
-          {
-            name: "presence-penalty and repeat-penalty",
-            purpose: "Discourage repeated tokens or repeated concepts.",
-            effect: "Can reduce loops, but aggressive values can make text worse.",
-            guidance: "Raise when a model repeats itself. Keep conservative for coding models.",
+            name: "--presence-penalty / --repeat-penalty",
+            purpose: "Discourage repeated concepts or token loops.",
+            ifYouChange: "Can net fewer repeated phrases.",
+            tradeoff: "Too much penalty can damage coherence or code accuracy.",
+            where: "Models -> Sampling",
           },
         ],
+        relatedTerms: ["temperature", "top-p", "top-k", "min-p", "repeat penalty"],
+        tags: ["sampling", "temperature", "top-p", "top-k"],
       },
       {
-        id: "context-generation-flags",
-        title: "Context and generation limits",
-        summary: "Keep and n-predict decide how much context is retained and how long a response can be.",
-        body: [
-          "keep preserves prompt tokens when context shifting happens. n-predict limits how many tokens the model can generate in a response.",
-          "Large n-predict values are useful for long code or reasoning, but they can tie up the model longer.",
+        id: "article-files-companions",
+        title: "Files And Companions",
+        category: "Model files",
+        summary:
+          "GGUF is the model file. Some models also need mmproj, chat templates, tokenizer files, or every shard in a multipart GGUF set.",
+        details: [
+          "The primary GGUF is passed to llama-server with -m. For multipart GGUFs, the command usually points at the first shard, but all shards must sit beside it on disk.",
+          "Vision models often need an mmproj file. Without it, the model may load as text-only or fail vision requests. Newer chat models may need a Jinja chat template or chat-template-kwargs to format prompts correctly.",
+          "Tokenizer-like files are sometimes not used directly by llama.cpp for GGUF inference, but keeping them beside the model helps future tooling and makes the folder self-describing.",
         ],
         settings: [
           {
-            name: "keep",
-            purpose: "Number of initial tokens to preserve during context shifting.",
-            effect: "Helps retain system prompt and instructions when the context window rolls forward.",
-            guidance: "Use enough to preserve system/developer context. Large values reduce flexible context room.",
+            name: "Primary model file",
+            purpose: "The GGUF passed to -m.",
+            ifYouChange: "The command loads a different model file.",
+            tradeoff: "Wrong file can load the wrong quant, miss shards, or fail immediately.",
+            where: "Models -> Files",
           },
           {
-            name: "n-predict",
-            purpose: "Maximum generated tokens.",
-            effect: "Caps response length and runtime.",
-            guidance: "Set higher for long reasoning or code generation. Set lower for fast assistants.",
+            name: "MMProj file",
+            purpose: "Vision projector file passed to --mmproj.",
+            ifYouChange: "Vision capability is added, removed, or pointed at a different projector.",
+            tradeoff: "Mismatched projector can break image understanding.",
+            where: "Models -> Files",
+          },
+          {
+            name: "Chat template file",
+            purpose: "Explicit template passed to --chat-template-file.",
+            ifYouChange: "Prompt formatting changes.",
+            tradeoff: "Wrong template can make a good model answer poorly.",
+            where: "Models -> Files",
           },
         ],
+        relatedTerms: ["GGUF", "multipart GGUF", "mmproj", "chat template", "tokenizer"],
+        relatedArticles: ["article-import-model", "article-command-builder"],
+        tags: ["gguf", "mmproj", "template", "tokenizer", "files"],
       },
       {
-        id: "raw-command",
-        title: "Raw command override",
-        summary: "Full manual control when the structured command builder is not enough.",
-        body: [
-          "Raw command override replaces the generated llama-server command for that model. It is useful for advanced flags, experimental llama.cpp options, or non-standard servers.",
-          "Because it bypasses structured generation, you must ensure paths, ${PORT}, CUDA visibility, and templates are correct yourself.",
+        id: "article-command-builder",
+        title: "Command Builder",
+        category: "Model command",
+        summary:
+          "The command builder converts structured model settings into the llama-server command written into config.yaml.",
+        details: [
+          "Structured command generation always includes the base llama-server executable, --port ${PORT}, the primary model file, companion file flags, and enabled tuning flags.",
+          "Use structured fields when possible. They let the manager validate paths, avoid host path leaks, render YAML consistently, and explain the effect of each setting.",
+          "Use raw command override only for unsupported flags or highly custom command layouts. A raw command must still include --port ${PORT} and container-visible paths.",
         ],
         warnings: [
-          "Raw commands can bypass validation. Prefer structured fields when they can express what you need.",
-          "Always include --port ${PORT} unless you also configure proxy behavior manually.",
+          "A raw command can bypass validation and break config even if the UI fields look correct.",
         ],
+        relatedTerms: ["llama-server", "raw command", "${PORT}", "config preview"],
+        relatedArticles: ["article-models-page", "article-config-preview"],
+        tags: ["command", "llama-server", "raw command", "port"],
+      },
+      {
+        id: "article-restart-control",
+        title: "Restart Control",
+        category: "Operations",
+        summary:
+          "Restart control is an optional manual button that uses the Docker socket to restart the llama-swap container after a config apply or restore.",
+        details: [
+          "Enabling restart control does not restart anything by itself. It allows Config Preview to inspect the configured container and expose a restart button.",
+          "The manager needs /var/run/docker.sock mounted and readable. Because the app runs as a non-root user, Compose may also need group_add set to the Docker socket group id.",
+          "This is intentionally not part of v1 automatic apply. Keeping apply and restart separate gives you a chance to inspect the diff and decide when to bounce llama-swap.",
+        ],
+        settings: [
+          {
+            name: "Enable llama-swap restart control",
+            purpose: "Turns on Docker socket status and restart actions.",
+            ifYouChange: "Config Preview can show runtime availability and a restart button.",
+            tradeoff: "Docker socket access can control the host. Keep the app trusted-LAN only.",
+            where: "Settings -> Restart control",
+          },
+          {
+            name: "llama-swap container name",
+            purpose: "Container inspected and restarted.",
+            ifYouChange: "Runtime panel targets a different container.",
+            tradeoff: "Wrong name produces unavailable status or restarts the wrong service.",
+            where: "Settings -> Restart control",
+          },
+          {
+            name: "Restart timeout seconds",
+            purpose: "Grace period passed to Docker restart.",
+            ifYouChange: "Docker waits longer or shorter before force-stopping.",
+            tradeoff: "Too short can interrupt shutdown; too long delays recovery.",
+            where: "Settings -> Restart control",
+          },
+        ],
+        relatedTerms: ["restart control", "Docker socket", "container name", "backup"],
+        relatedArticles: ["article-config-preview"],
+        tags: ["restart", "docker", "socket", "llama-swap"],
       },
     ],
   },
   {
-    id: "troubleshooting",
-    title: "Troubleshooting",
-    eyebrow: "Ops",
-    description: "Common failure modes and what to inspect first.",
-    topics: [
+    id: "runbooks",
+    title: "Runbooks",
+    eyebrow: "Fix paths",
+    description:
+      "Short operational recipes for the states that usually make llama-swap and llama.cpp feel harder than Ollama.",
+    articles: [
       {
-        id: "download-issues",
-        title: "Downloads look stuck",
-        summary: "Use the queue state, byte progress, and logs to tell queued, blocked, running, and failed jobs apart.",
-        body: [
-          "Queued means the job exists but is waiting for a download slot. Running means the child download process has started. Completed jobs have written_files and container_files. Failed jobs include an error.",
-          "For new downloads, byte progress is based on Hugging Face file metadata and the local cache .incomplete file. If bytes do not move for a long time, check token access, network, disk, and the HF cache mount.",
+        id: "article-downloaded-not-installed",
+        title: "Downloaded But Not Installed",
+        category: "Runbook",
+        summary:
+          "A finished download becomes useful only after it is converted into a managed model and included in the generated config.",
+        details: [
+          "Open Import Model and look for Ready Downloads. If the downloaded job appears there, use Create Managed Model. If it does not, scan existing files and create the model from the GGUF on disk.",
+          "After the model exists, open Models and verify name, role, primary file, companion files, GPU placement, and matrix behavior. Then open Config Preview and confirm the new model appears in YAML.",
+          "Apply config with backup. Restart llama-swap manually or with the runtime panel. The model will not be served by llama-swap until llama-swap loads the updated config.",
         ],
+        workflow: [
+          "Ready Downloads -> Create Managed Model.",
+          "Models -> verify command and GPU fields.",
+          "Config Preview -> Preview -> Apply.",
+          "Restart llama-swap.",
+        ],
+        relatedTerms: ["download job", "managed model", "config preview", "restart control"],
+        relatedArticles: ["article-staged-pipeline", "article-import-model"],
+        tags: ["downloaded", "installed", "ready downloads", "not installed"],
       },
       {
-        id: "config-issues",
-        title: "Config apply fails",
-        summary: "Most config apply failures are path, write permission, or validation issues.",
-        body: [
-          "Check Dashboard config status. If it is not writable, verify the compose bind mount for config.yaml is a file mount and not a directory.",
-          "If generated paths look wrong, verify Manager model root and Llama-swap model root. The generated command should use /models/... paths.",
-          "If a bad config was applied, use Config Preview > Backups to restore a previous config, then restart llama-swap manually.",
+        id: "article-private-repo",
+        title: "Private Or Gated Repo Fails",
+        category: "Runbook",
+        summary:
+          "When public repos resolve but gated repos fail, start with token presence, repo permissions, and accepted model terms.",
+        details: [
+          "Go to Settings and confirm token status is present. If not, save a read token. If present, verify the Hugging Face account has access to the repo and accepted any gated model terms.",
+          "If file listing works but download fails, retry the job and inspect the queue error. Token, disk space, and network interruptions are the common causes.",
+          "If a direct file URL includes a revision, make sure the revision exists and the file path is spelled exactly as Hugging Face reports it.",
         ],
+        relatedTerms: ["HF token", "revision", "gated repo", "download job"],
+        relatedArticles: ["article-hf-token", "article-import-model"],
+        tags: ["private", "gated", "token", "hugging face"],
       },
       {
-        id: "model-load-issues",
-        title: "Model fails to load",
-        summary: "Start with paths and VRAM, then tune context, cache, and GPU placement.",
-        body: [
-          "Confirm the primary GGUF exists inside /models. Confirm mmproj and chat template paths if the model needs vision or custom chat formatting.",
-          "If llama.cpp fails with memory errors, lower ctx-size, lower ubatch-size, adjust tensor split, or reduce n-gpu-layers. Mixed GPU rigs often need explicit tensor split.",
+        id: "article-model-load-fails",
+        title: "Model Fails To Load",
+        category: "Runbook",
+        summary:
+          "Start with path correctness, then VRAM pressure, then companion files, then model-specific flags.",
+        details: [
+          "First verify the generated command uses /models paths and that the primary GGUF exists at that path inside the llama-swap container. A host-only path will fail even if the file exists on disk.",
+          "If llama.cpp reports memory or allocation errors, lower ctx-size, lower ubatch-size, adjust tensor split, or reduce n-gpu-layers. On mixed cards, tensor split is often the difference between success and failure.",
+          "For vision models, verify mmproj and chat template path. For Qwen-family models, confirm jinja and chat-template-kwargs are set the way that model expects.",
         ],
+        workflow: [
+          "Check generated command path.",
+          "Check CUDA devices and tensor split.",
+          "Lower ctx-size or cache precision if VRAM is tight.",
+          "Verify mmproj/template files for vision and chat-template-heavy models.",
+        ],
+        relatedTerms: ["GGUF", "VRAM", "ctx-size", "tensor split", "mmproj", "chat template"],
+        relatedArticles: ["article-gpu-placement", "article-context-kv-cache", "article-files-companions"],
+        tags: ["load fail", "vram", "llama.cpp", "tensor split"],
+      },
+      {
+        id: "article-config-rollback",
+        title: "Rollback A Bad Config",
+        category: "Runbook",
+        summary:
+          "Use backups to restore a known-good config, then restart llama-swap so it reads the restored file.",
+        details: [
+          "Open Config Preview and use the Backups list. Restore first backs up the current config, then writes the selected backup over the active config path.",
+          "After restore, restart llama-swap. The file on disk is restored immediately, but the running service must reload or restart before it serves from that file.",
+          "If restore fails because config is not writable, inspect the /app/config.yaml bind mount and file permissions on the host.",
+        ],
+        relatedTerms: ["backup", "restore", "config preview", "restart control"],
+        relatedArticles: ["article-config-preview", "article-container-paths"],
+        tags: ["rollback", "backup", "restore", "config"],
       },
     ],
+  },
+];
+
+export const impactRows: ImpactRow[] = [
+  {
+    id: "impact-ctx-size",
+    setting: "ctx-size",
+    change: "Increase ctx-size",
+    canNet: "Longer prompts and documents, larger code context, and longer conversations before context shifting.",
+    cost: "More KV cache memory. Large values can prevent a model from loading or reduce how many models can coexist.",
+    where: "Models -> Context, or Settings -> Command defaults for future models",
+    articleId: "article-context-kv-cache",
+  },
+  {
+    id: "impact-cache-type",
+    setting: "cache-type-k / cache-type-v",
+    change: "Lower precision, for example q4_0",
+    canNet: "More context or more concurrent models in the same VRAM budget.",
+    cost: "Potential quality, stability, or model-specific behavior tradeoff.",
+    where: "Models -> Context",
+    articleId: "article-context-kv-cache",
+  },
+  {
+    id: "impact-tensor-split",
+    setting: "tensor split",
+    change: "Tune split ratios across visible GPUs",
+    canNet: "Better VRAM balance and successful loads on multi-GPU or mixed-VRAM rigs.",
+    cost: "Bad ratios overload one card while others have free space.",
+    where: "Models -> GPU",
+    articleId: "article-gpu-placement",
+  },
+  {
+    id: "impact-ubatch",
+    setting: "ubatch-size",
+    change: "Lower ubatch-size",
+    canNet: "Survive prompt-processing memory pressure without cutting context first.",
+    cost: "Prompt ingestion can slow down.",
+    where: "Models -> Throughput",
+    articleId: "article-throughput",
+  },
+  {
+    id: "impact-ttl",
+    setting: "TTL",
+    change: "Set ttl to 0 or raise it",
+    canNet: "Hot models stay loaded and avoid reload wait.",
+    cost: "VRAM remains occupied, which can block larger models.",
+    where: "Models -> Runtime, or Settings -> Model defaults",
+    articleId: "article-default-presets",
+  },
+  {
+    id: "impact-restart",
+    setting: "restart control",
+    change: "Enable restart controls",
+    canNet: "One-click llama-swap restart after apply or restore.",
+    cost: "Requires Docker socket access, which is powerful host control.",
+    where: "Settings -> Restart control",
+    articleId: "article-restart-control",
+  },
+  {
+    id: "impact-hf-token",
+    setting: "HF token",
+    change: "Save a read token",
+    canNet: "Private and gated repositories can resolve and download directly on the rig.",
+    cost: "Token must be protected and rotated if exposed.",
+    where: "Settings -> Hugging Face",
+    articleId: "article-hf-token",
+  },
+];
+
+export const glossaryTerms: GlossaryTerm[] = [
+  {
+    term: "GGUF",
+    slug: "gguf",
+    shortDefinition: "The model file format loaded by llama.cpp.",
+    details: "The primary GGUF is the file passed to llama-server with -m. Quant suffixes describe compression and size tradeoffs.",
+    articleId: "article-files-companions",
+    relatedTerms: ["multipart GGUF", "quantization", "llama-server"],
+  },
+  {
+    term: "multipart GGUF",
+    slug: "multipart-gguf",
+    shortDefinition: "A model split across several GGUF shard files.",
+    details: "The command usually points at shard 00001, but all shards must be downloaded beside it.",
+    articleId: "article-files-companions",
+    relatedTerms: ["GGUF"],
+  },
+  {
+    term: "mmproj",
+    slug: "mmproj",
+    shortDefinition: "Vision projector companion file.",
+    details: "Vision models use --mmproj to connect image features to the language model.",
+    articleId: "article-files-companions",
+    relatedTerms: ["chat template"],
+  },
+  {
+    term: "chat template",
+    slug: "chat-template",
+    shortDefinition: "Prompt formatting rules expected by a chat model.",
+    details: "A template can be built into the model or supplied through --chat-template-file with --jinja.",
+    articleId: "article-files-companions",
+    relatedTerms: ["jinja"],
+  },
+  {
+    term: "ctx-size",
+    slug: "ctx-size",
+    shortDefinition: "Maximum token window for a model request.",
+    details: "Bigger context lets the model see more text, but it consumes more KV cache memory.",
+    articleId: "article-context-kv-cache",
+    relatedTerms: ["KV cache", "parallel"],
+  },
+  {
+    term: "KV cache",
+    slug: "kv-cache",
+    shortDefinition: "Memory used to store attention keys and values for active context.",
+    details: "KV cache grows with ctx-size and parallel slots. cache-type-k and cache-type-v control its precision.",
+    articleId: "article-context-kv-cache",
+    relatedTerms: ["cache-type-k", "cache-type-v"],
+  },
+  {
+    term: "cache-type-k",
+    slug: "cache-type-k",
+    shortDefinition: "Key-cache precision for llama.cpp KV cache.",
+    details: "Lower precision can save memory and enable larger context windows.",
+    articleId: "article-context-kv-cache",
+  },
+  {
+    term: "cache-type-v",
+    slug: "cache-type-v",
+    shortDefinition: "Value-cache precision for llama.cpp KV cache.",
+    details: "Usually paired with cache-type-k. q4_0 is a common large-context setting.",
+    articleId: "article-context-kv-cache",
+  },
+  {
+    term: "CUDA_VISIBLE_DEVICES",
+    slug: "cuda-visible-devices",
+    shortDefinition: "Environment variable limiting which GPUs a model process can see.",
+    details: "The manager emits it from selected CUDA indexes in the model's env block.",
+    articleId: "article-gpu-placement",
+    relatedTerms: ["CUDA index", "tensor split"],
+  },
+  {
+    term: "CUDA index",
+    slug: "cuda-index",
+    shortDefinition: "GPU number reported by CUDA and nvidia-smi.",
+    details: "Use the same index in GPU Planner and model placement so commands target the intended card.",
+    articleId: "article-gpu-planner",
+  },
+  {
+    term: "tensor split",
+    slug: "tensor-split",
+    shortDefinition: "Ratio for dividing model tensors across visible GPUs.",
+    details: "Equal cards often use 1,1. Mixed cards need weighted ratios based on available VRAM.",
+    articleId: "article-gpu-placement",
+    relatedTerms: ["VRAM", "main GPU"],
+  },
+  {
+    term: "main GPU",
+    slug: "main-gpu",
+    shortDefinition: "Primary visible GPU used by llama.cpp.",
+    details: "Usually the first visible GPU unless a model-specific layout needs another card.",
+    articleId: "article-gpu-placement",
+  },
+  {
+    term: "n-gpu-layers",
+    slug: "n-gpu-layers",
+    shortDefinition: "How many model layers llama.cpp tries to offload to GPU.",
+    details: "999 is commonly used as 'full offload if possible'. Lower values reduce VRAM use but slow inference.",
+    articleId: "article-gpu-placement",
+  },
+  {
+    term: "VRAM",
+    slug: "vram",
+    shortDefinition: "GPU memory available for model weights, KV cache, buffers, and batches.",
+    details: "VRAM fit depends on quantization, context, cache precision, batch sizes, and GPU split.",
+    articleId: "article-gpu-planner",
+  },
+  {
+    term: "TTL",
+    slug: "ttl",
+    shortDefinition: "How long llama-swap keeps an inactive model loaded.",
+    details: "ttl: 0 keeps a model loaded indefinitely. Higher values unload after inactivity.",
+    articleId: "article-default-presets",
+  },
+  {
+    term: "matrix",
+    slug: "matrix",
+    shortDefinition: "llama-swap concurrency rules for which models may run together.",
+    details: "The manager emits matrix vars and sets instead of legacy groups.",
+    articleId: "article-matrix",
+    relatedTerms: ["support model", "evict cost"],
+  },
+  {
+    term: "support model",
+    slug: "support-model",
+    shortDefinition: "A small model intended to stay available beside larger models.",
+    details: "Embedding, reranking, and small vision support models are common support entries.",
+    articleId: "article-matrix",
+  },
+  {
+    term: "evict cost",
+    slug: "evict-cost",
+    shortDefinition: "Hint describing how expensive a model is to unload.",
+    details: "Higher cost models are better candidates to keep loaded during eviction decisions.",
+    articleId: "article-matrix",
+  },
+  {
+    term: "HF token",
+    slug: "hf-token",
+    shortDefinition: "Hugging Face API token used by the rig for repo listing and downloads.",
+    details: "Use a read token for private, gated, or rate-limited repos. The UI never displays the token value.",
+    articleId: "article-hf-token",
+  },
+  {
+    term: "revision",
+    slug: "revision",
+    shortDefinition: "Hugging Face branch, tag, or commit snapshot.",
+    details: "main is convenient. Commit hashes make repeated downloads deterministic.",
+    articleId: "article-hf-token",
+  },
+  {
+    term: "bind mount",
+    slug: "bind-mount",
+    shortDefinition: "Docker mapping from a host path to a container path.",
+    details: "The app writes container paths. Compose decides which host storage backs those paths.",
+    articleId: "article-container-paths",
+  },
+  {
+    term: "backup",
+    slug: "backup",
+    shortDefinition: "Timestamped config copy created before apply or restore.",
+    details: "Backups are the rollback path when a generated config is wrong.",
+    articleId: "article-config-preview",
+  },
+  {
+    term: "restart control",
+    slug: "restart-control",
+    shortDefinition: "Optional manual Docker restart button for llama-swap.",
+    details: "Requires Docker socket access and a matching container name.",
+    articleId: "article-restart-control",
+  },
+  {
+    term: "Docker socket",
+    slug: "docker-socket",
+    shortDefinition: "Unix socket that lets the manager talk to the Docker daemon.",
+    details: "Powerful host-level control. Mount only on a trusted LAN manager container.",
+    articleId: "article-restart-control",
+  },
+  {
+    term: "managed model",
+    slug: "managed-model",
+    shortDefinition: "A saved app record that can render into a llama-swap model entry.",
+    details: "It connects model files, flags, GPU placement, aliases, TTL, and matrix behavior.",
+    articleId: "article-models-page",
+  },
+  {
+    term: "config preview",
+    slug: "config-preview",
+    shortDefinition: "Generated YAML plus diff before applying changes.",
+    details: "Preview lets you validate and inspect the exact config that apply will write.",
+    articleId: "article-config-preview",
+  },
+  {
+    term: "raw command",
+    slug: "raw-command",
+    shortDefinition: "Manual command text that replaces structured command generation.",
+    details: "Use only when the builder cannot express the command. You own ${PORT}, paths, and flags.",
+    articleId: "article-command-builder",
+  },
+  {
+    term: "llama-server",
+    slug: "llama-server",
+    shortDefinition: "llama.cpp server process launched by llama-swap for each model.",
+    details: "The generated command runs llama-server with --port ${PORT}, -m, and tuning flags.",
+    articleId: "article-command-builder",
   },
 ];
