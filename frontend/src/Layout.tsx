@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
 import { queryKeys } from "./queryKeys";
 import { StatusPill } from "./components/StatusPill";
+import { useTargetRig } from "./targetRigContext";
 
 const navItems = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -16,7 +17,8 @@ const navItems = [
 ];
 
 export function Layout() {
-  const state = useQuery({ queryKey: queryKeys.state, queryFn: api.state, refetchInterval: 15000 });
+  const { targetRigId, setTargetRigId, targetRigs, selectedRig } = useTargetRig();
+  const state = useQuery({ queryKey: queryKeys.stateFor(targetRigId), queryFn: () => api.state(targetRigId), refetchInterval: 15000 });
 
   return (
     <div className="app-shell">
@@ -47,9 +49,24 @@ export function Layout() {
         <div className="topbar">
           <div className="topbar-cluster">
             <Activity size={16} aria-hidden="true" />
-            <span>{state.isFetching ? "syncing API state" : "API state current"}</span>
+            <span>{state.isFetching ? "syncing target state" : "target state current"}</span>
+            <label className="target-selector">
+              <span>Target</span>
+              <select value={targetRigId} onChange={(event) => setTargetRigId(event.target.value)}>
+                {targetRigs.length ? (
+                  targetRigs.map((rig) => (
+                    <option key={rig.id} value={rig.id}>
+                      {rig.name} ({rig.mode})
+                    </option>
+                  ))
+                ) : (
+                  <option value="default">Local Manager Host</option>
+                )}
+              </select>
+            </label>
           </div>
           <div className="topbar-metrics">
+            <span>{selectedRig?.host || selectedRig?.mode || "local"}</span>
             <span>{state.data?.model_count ?? 0} models</span>
             <span>{state.data?.gpus.length ?? 0} GPUs</span>
             <span>{state.data?.job_count ?? 0} jobs</span>

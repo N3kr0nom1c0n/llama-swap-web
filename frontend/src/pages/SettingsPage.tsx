@@ -1,22 +1,31 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { KeyRound, Power, Save, ShieldAlert, Trash2 } from "lucide-react";
+import { KeyRound, Network, Power, Save, ShieldAlert, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { Field } from "../components/Field";
 import { PageHeader } from "../components/PageHeader";
 import { StatusPill } from "../components/StatusPill";
 import { queryKeys } from "../queryKeys";
-import type { ManagerSettings } from "../types";
+import { useTargetRig } from "../targetRigContext";
+import type { ManagerSettings, TargetRig } from "../types";
 
 export function SettingsPage() {
   const queryClient = useQueryClient();
+  const { targetRigId, setTargetRigId } = useTargetRig();
   const settings = useQuery({ queryKey: queryKeys.settings, queryFn: api.settings });
+  const targetRigs = useQuery({ queryKey: queryKeys.targetRigs, queryFn: api.targetRigs });
   const [draft, setDraft] = useState<ManagerSettings | null>(null);
+  const [rigDraft, setRigDraft] = useState<TargetRig | null>(null);
   const [hfToken, setHfToken] = useState("");
 
   useEffect(() => {
     if (settings.data) setDraft(settings.data);
   }, [settings.data]);
+
+  useEffect(() => {
+    const selected = targetRigs.data?.find((rig) => rig.id === targetRigId) ?? targetRigs.data?.[0] ?? null;
+    if (selected) setRigDraft(selected);
+  }, [targetRigId, targetRigs.data]);
 
   const save = useMutation({
     mutationFn: api.saveSettings,
@@ -44,6 +53,20 @@ export function SettingsPage() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.state });
     },
   });
+  const saveRig = useMutation({
+    mutationFn: api.saveTargetRig,
+    onSuccess: (data) => {
+      setTargetRigId(data.id);
+      setRigDraft(data);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.targetRigs });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.state });
+    },
+  });
+  const health = useQuery({
+    queryKey: rigDraft ? queryKeys.targetRigHealth(rigDraft.id) : ["target-rigs", "health", "none"],
+    queryFn: () => api.targetRigHealth(rigDraft?.id ?? "default"),
+    enabled: false,
+  });
 
   if (!draft) {
     return (
@@ -58,6 +81,8 @@ export function SettingsPage() {
     update({ role_directories: { ...draft.role_directories, [key]: value } });
   const updateDefault = (key: keyof ManagerSettings["defaults"], value: string | number | boolean) =>
     update({ defaults: { ...draft.defaults, [key]: value } });
+  const updateRig = (patch: Partial<TargetRig>) => setRigDraft((current) => (current ? { ...current, ...patch } : current));
+  const selectedRigMode = rigDraft?.mode ?? "local";
 
   return (
     <div className="page">
@@ -71,6 +96,122 @@ export function SettingsPage() {
           </button>
         }
       />
+
+      <section className="panel">
+        <div className="panel-header">
+          <h2>Target Rigs</h2>
+          <StatusPill tone={selectedRigMode === "ssh" ? "ok" : "idle"}>{selectedRigMode === "ssh" ? "SSH remote" : "local target"}</StatusPill>
+        </div>
+        <div className="callout">
+          <div>
+            <strong>
+              <Network size={16} aria-hidden="true" />
+              llama-swap operations run against the selected target rig
+            </strong>
+            <p>HF downloads, model scans, config apply/restore, GPU detection, and restart commands use these settings. Use SSH for a separate AI rig.</p>
+          </div>
+        </div>
+        <div className="form-grid">
+          <Field label="Edit rig">
+            <select
+              value={rigDraft?.id ?? ""}
+              onChange={(event) => {
+                const next = targetRigs.data?.find((rig) => rig.id === event.target.value);
+                if (next) {
+                  setRigDraft(next);
+                  setTargetRigId(next.id);
+                }
+              }}
+            >
+              {targetRigs.data?.map((rig) => (
+                <option key={rig.id} value={rig.id}>
+                  {rig.name} ({rig.mode})
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="New rig">
+            <button className="button secondary" type="button" onClick={() => setRigDraft(newSshRig(draft, targetRigs.data ?? []))}>
+              <Network size={16} aria-hidden="true" />
+              New SSH Rig
+            </button>
+          </Field>
+        </div>
+        {rigDraft ? (
+          <>
+            <div className="form-grid">
+              <Field label="Rig ID">
+                <input value={rigDraft.id} onChange={(event) => updateRig({ id: event.target.value })} />
+              </Field>
+              <Field label="Name">
+                <input value={rigDraft.name} onChange={(event) => updateRig({ name: event.target.value })} />
+              </Field>
+              <Field label="Mode">
+                <select value={rigDraft.mode} onChange={(event) => updateRig({ mode: event.target.value as TargetRig["mode"] })}>
+                  <option value="ssh">SSH remote</option>
+                  <option value="local">Local manager host</option>
+                </select>
+              </Field>
+              <Field label="Enabled">
+                <label className="check-chip">
+                  <input type="checkbox" checked={rigDraft.enabled} onChange={(event) => updateRig({ enabled: event.target.checked })} />
+                  Active target
+                </label>
+              </Field>
+              <Field label="Host">
+                <input value={rigDraft.host} onChange={(event) => updateRig({ host: event.target.value })} placeholder="192.168.42.40" />
+              </Field>
+              <Field label="SSH port">
+                <input type="number" value={rigDraft.port} onChange={(event) => updateRig({ port: Number(event.target.value) })} />
+              </Field>
+              <Field label="Username">
+                <input value={rigDraft.username} onChange={(event) => updateRig({ username: event.target.value })} placeholder="n3kr0" />
+              </Field>
+              <Field label="SSH key path">
+                <input value={rigDraft.ssh_key_path} onChange={(event) => updateRig({ ssh_key_path: event.target.value })} placeholder="/data/ssh/id_ed25519" />
+              </Field>
+            </div>
+            <div className="form-grid">
+              <Field label="Target model root">
+                <input value={rigDraft.model_root} onChange={(event) => updateRig({ model_root: event.target.value })} />
+              </Field>
+              <Field label="llama-swap model root">
+                <input value={rigDraft.llama_swap_model_root} onChange={(event) => updateRig({ llama_swap_model_root: event.target.value })} />
+              </Field>
+              <Field label="Target config path">
+                <input value={rigDraft.config_path} onChange={(event) => updateRig({ config_path: event.target.value })} />
+              </Field>
+              <Field label="Target backups dir">
+                <input value={rigDraft.backups_dir} onChange={(event) => updateRig({ backups_dir: event.target.value })} />
+              </Field>
+              <Field label="Target temp dir">
+                <input value={rigDraft.download_temp_dir} onChange={(event) => updateRig({ download_temp_dir: event.target.value })} />
+              </Field>
+              <Field label="Restart command">
+                <input value={rigDraft.restart_command} onChange={(event) => updateRig({ restart_command: event.target.value })} />
+              </Field>
+              <Field label="Health check command">
+                <input value={rigDraft.health_check_command} onChange={(event) => updateRig({ health_check_command: event.target.value })} />
+              </Field>
+            </div>
+            <div className="inline-actions">
+              <button className="button" type="button" onClick={() => saveRig.mutate(rigDraft)} disabled={saveRig.isPending || !rigDraft.id}>
+                <Save size={16} aria-hidden="true" />
+                Save Target Rig
+              </button>
+              <button className="button secondary" type="button" onClick={() => health.refetch()} disabled={health.isFetching || !rigDraft.id}>
+                Check Target Health
+              </button>
+            </div>
+            {saveRig.error ? <p className="form-error">{saveRig.error.message}</p> : null}
+            {saveRig.isSuccess ? <p className="form-success">Target rig saved.</p> : null}
+            {health.error ? <p className="form-error">{health.error.message}</p> : null}
+            {health.data ? <pre className="health-output">{JSON.stringify(health.data, null, 2)}</pre> : null}
+          </>
+        ) : (
+          <p className="muted">No target rigs loaded yet.</p>
+        )}
+      </section>
 
       <section className="panel">
         <div className="panel-header">
@@ -283,4 +424,32 @@ export function SettingsPage() {
       </section>
     </div>
   );
+}
+
+function newSshRig(settings: ManagerSettings, existing: TargetRig[]): TargetRig {
+  const used = new Set(existing.map((rig) => rig.id));
+  let index = 1;
+  let id = "rig-ssh";
+  while (used.has(id)) {
+    index += 1;
+    id = `rig-ssh-${index}`;
+  }
+  return {
+    id,
+    name: "Remote llama-swap rig",
+    mode: "ssh",
+    host: "",
+    port: 22,
+    username: "n3kr0",
+    ssh_key_path: "",
+    model_root: settings.manager_model_root || "/models",
+    llama_swap_model_root: settings.llama_swap_model_root || "/models",
+    config_path: settings.llama_swap_config_path || "/app/config.yaml",
+    backups_dir: settings.backups_dir || "/backups",
+    download_temp_dir: "/tmp",
+    restart_command: "docker restart llama-swap",
+    health_check_command: "docker ps --filter name=llama-swap --format '{{.Names}} {{.Status}}'",
+    enabled: true,
+    is_default: false,
+  };
 }

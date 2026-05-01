@@ -11,11 +11,11 @@ Llama-Swap Web manages model files and llama-swap config generation from a brows
    cp compose.example.yml compose.yml
    ```
 
-2. Edit `.env` and `compose.yml` for your rig paths.
+2. Edit `.env` and `compose.yml`.
 
-3. Mount the same model root that llama-swap sees as `/models`.
+3. For a remote llama-swap rig, mount an SSH key at `/data/ssh/id_ed25519`. For single-host local mode, mount the same model root that llama-swap sees as `/models`.
 
-4. Mount the manager config path writable. The llama-swap container can keep its own config mount read-only.
+4. For remote mode, create a Target Rig in Settings with the rig host, model root, config path, backups dir, and restart command. For local mode, mount the manager config path writable. The llama-swap container can keep its own config mount read-only.
 
 5. Start the manager:
 
@@ -27,7 +27,7 @@ Llama-Swap Web manages model files and llama-swap config generation from a brows
 
 ## First Run Workflow
 
-1. Open Settings and confirm model root, llama-swap model root, config path, backup path, data path, and HF token state.
+1. Open Settings and select or create the correct Target Rig. Confirm target model root, llama-swap model root, config path, backup path, health check, restart command, and HF token state.
 2. Open GPU Planner and detect or enter CUDA devices.
 3. Open Import Model and resolve a Hugging Face URL or upload a file.
 4. Start the download or upload into the role-specific model folder.
@@ -35,7 +35,7 @@ Llama-Swap Web manages model files and llama-swap config generation from a brows
 6. Open Managed Models, check files, GPU plan, ttl, matrix behavior, and llama.cpp flags.
 7. Open Config Preview, review validation, warnings, generated YAML, and diff.
 8. Apply config. A backup is created first.
-9. Restart llama-swap manually, or use Config Preview's restart button if restart controls are enabled and the Docker socket/container check is healthy.
+9. Restart llama-swap manually, or use Config Preview's restart button if the selected target rig restart check is healthy.
 
 ## Existing llama-swap Installs
 

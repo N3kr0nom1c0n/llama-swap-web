@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import posixpath
 import re
+import tempfile
 import uuid
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -17,10 +19,8 @@ from ruamel.yaml import YAML
 from .config_service import (
     backup_and_apply_config,
     detect_destructive_changes,
-    list_config_backups,
     manager_to_llama_path,
     preview_config,
-    restore_config_backup,
     safe_join,
 )
 from .config_import import import_candidates_from_config
@@ -30,10 +30,11 @@ from .gpu_service import detect_gpus, gpu_status, recommend_tensor_split, valida
 from .hf_service import resolve_hf_url
 from .schemas import (
     ConfigApplyRequest,
-    ConfigRestoreRequest,
     ConfigImportRequest,
     ConfigPreviewRequest,
+    ConfigRestoreRequest,
     CreateModelFromDownloadRequest,
+    DEFAULT_TARGET_RIG_ID,
     DownloadRequest,
     FileInventoryItem,
     GpuDevice,
@@ -43,10 +44,12 @@ from .schemas import (
     ImportDraftRequest,
     ManagedModel,
     StateResponse,
+    TargetRig,
 )
-from .model_inventory import model_from_download, scan_model_files
+from .model_inventory import model_from_download
 from .restart_service import LlamaSwapRestartError, get_llama_swap_status, restart_llama_swap
 from .settings import ManagerSettings, clear_hf_token, default_db_path, get_hf_token, save_hf_token
+from .target_rig_service import TargetRigError, container_path_for_target_path, create_target_client, effective_settings_for_rig, target_path_for_container_path
 
 UPLOAD_CHUNK_SIZE = 1024 * 1024
 STAGED_CONFIG_TTL_SECONDS = 15 * 60
@@ -68,20 +71,44 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     )
 
     @app.get("/api/state", response_model=StateResponse)
-    def state() -> StateResponse:
+    def state(target_rig_id: str = DEFAULT_TARGET_RIG_ID) -> StateResponse:
         settings = db.get_settings()
-        config_path = Path(settings.llama_swap_config_path)
+        rig = _target_rig_or_404(db, target_rig_id)
+        client = create_target_client(rig, settings)
+        config_status = client.path_status(rig.config_path)
         return StateResponse(
             settings=settings.public_dict(),
-            gpus=db.list_gpus(),
-            model_count=len(db.list_models()),
-            job_count=len(db.list_jobs()),
-            config_status={
-                "path": settings.llama_swap_config_path,
-                "exists": config_path.exists(),
-                "writable": os.access(config_path.parent if not config_path.exists() else config_path, os.W_OK),
-            },
+            target_rigs=db.list_target_rigs(),
+            gpus=db.list_gpus(rig.id),
+            model_count=len(db.list_models(rig.id)),
+            job_count=len(db.list_jobs(rig.id)),
+            config_status=config_status,
         )
+
+    @app.get("/api/target-rigs")
+    def list_target_rigs() -> list[dict]:
+        return [rig.model_dump(mode="json") for rig in db.list_target_rigs()]
+
+    @app.post("/api/target-rigs")
+    def save_target_rig(rig: TargetRig) -> dict:
+        if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}", rig.id):
+            raise HTTPException(status_code=400, detail="target rig id must be a safe slug")
+        if rig.mode == "ssh" and (not rig.host or not rig.username):
+            raise HTTPException(status_code=400, detail="SSH target rigs require host and username")
+        return db.save_target_rig(rig).model_dump(mode="json")
+
+    @app.get("/api/target-rigs/{target_rig_id}/health")
+    def target_rig_health(target_rig_id: str) -> dict:
+        settings = db.get_settings()
+        rig = _target_rig_or_404(db, target_rig_id)
+        client = create_target_client(rig, settings)
+        return {
+            "rig": rig.model_dump(mode="json"),
+            "model_root": client.path_status(rig.model_root),
+            "config": client.path_status(rig.config_path),
+            "backups": client.path_status(rig.backups_dir),
+            "runtime": client.runtime_status(),
+        }
 
     @app.get("/api/settings")
     def get_settings() -> dict:
@@ -111,30 +138,40 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         return db.get_settings().public_dict()
 
     @app.get("/api/llama-swap/status")
-    def llama_swap_status() -> dict:
-        return get_llama_swap_status(db.get_settings())
+    def llama_swap_status(target_rig_id: str = DEFAULT_TARGET_RIG_ID) -> dict:
+        settings = db.get_settings()
+        rig = _target_rig_or_404(db, target_rig_id)
+        if rig.mode == "ssh":
+            return create_target_client(rig, settings).runtime_status()
+        return get_llama_swap_status(settings)
 
     @app.post("/api/llama-swap/restart")
-    def llama_swap_restart() -> dict:
+    def llama_swap_restart(target_rig_id: str = DEFAULT_TARGET_RIG_ID) -> dict:
         try:
-            return restart_llama_swap(db.get_settings())
-        except LlamaSwapRestartError as exc:
+            settings = db.get_settings()
+            rig = _target_rig_or_404(db, target_rig_id)
+            if rig.mode == "ssh":
+                return create_target_client(rig, settings).restart()
+            return restart_llama_swap(settings)
+        except (LlamaSwapRestartError, TargetRigError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/api/gpus", response_model=list[GpuDevice])
-    def get_gpus() -> list[GpuDevice]:
-        return db.list_gpus()
+    def get_gpus(target_rig_id: str = DEFAULT_TARGET_RIG_ID) -> list[GpuDevice]:
+        return db.list_gpus(target_rig_id)
 
     @app.put("/api/gpus", response_model=list[GpuDevice])
-    def put_gpus(gpus: list[GpuDevice]) -> list[GpuDevice]:
-        return db.save_gpus(gpus)
+    def put_gpus(gpus: list[GpuDevice], target_rig_id: str = DEFAULT_TARGET_RIG_ID) -> list[GpuDevice]:
+        return db.save_gpus(gpus, target_rig_id)
 
     @app.get("/api/gpus/detect")
-    def detect_cuda_gpus() -> dict:
-        detected = detect_gpus()
+    def detect_cuda_gpus(target_rig_id: str = DEFAULT_TARGET_RIG_ID) -> dict:
+        settings = db.get_settings()
+        rig = _target_rig_or_404(db, target_rig_id)
+        detected = create_target_client(rig, settings).detect_gpus() if rig.mode == "ssh" else detect_gpus()
         if not detected.get("available"):
             return detected
-        saved = {gpu.index: gpu for gpu in db.list_gpus()}
+        saved = {gpu.index: gpu for gpu in db.list_gpus(rig.id)}
         merged = []
         for gpu in detected["gpus"]:
             saved_gpu = saved.get(int(gpu["index"]))
@@ -148,12 +185,16 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         return {**detected, "gpus": merged}
 
     @app.get("/api/gpus/status")
-    def cuda_gpu_status() -> dict:
-        return gpu_status()
+    def cuda_gpu_status(target_rig_id: str = DEFAULT_TARGET_RIG_ID) -> dict:
+        settings = db.get_settings()
+        rig = _target_rig_or_404(db, target_rig_id)
+        return create_target_client(rig, settings).gpu_status() if rig.mode == "ssh" else gpu_status()
 
     @app.post("/api/gpus/recommend")
     def recommend_cuda_plan(payload: GpuRecommendationRequest) -> dict:
-        detected = detect_gpus()
+        settings = db.get_settings()
+        rig = _target_rig_or_404(db, payload.target_rig_id)
+        detected = create_target_client(rig, settings).detect_gpus() if rig.mode == "ssh" else detect_gpus()
         selected = payload.cuda_devices
         if not detected.get("available"):
             return {
@@ -185,15 +226,17 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     @app.post("/api/imports")
     def create_import(payload: ImportDraftRequest) -> dict:
         settings = db.get_settings()
-        container_dir = getattr(settings.role_directories, payload.role)
+        rig = _target_rig_or_404(db, payload.target_rig_id)
+        rig_settings = effective_settings_for_rig(settings, rig)
+        container_dir = getattr(rig_settings.role_directories, payload.role)
         try:
-            role_relative = Path(container_dir).relative_to(settings.llama_swap_model_root)
             model_dir = _import_model_directory(payload)
-            manager_dir = safe_join(settings.manager_model_root, role_relative, model_dir)
+            manager_dir = target_path_for_container_path(rig, str(Path(container_dir) / model_dir).replace("\\", "/"))
             llama_dir = str(Path(container_dir) / model_dir).replace("\\", "/")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
+            "target_rig_id": rig.id,
             "role": payload.role,
             "destination_dir": str(manager_dir),
             "container_dir": llama_dir,
@@ -207,8 +250,8 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         return app.state.download_manager.start(payload).model_dump(mode="json")
 
     @app.get("/api/downloads")
-    def list_downloads() -> list[dict]:
-        return [job.model_dump(mode="json") for job in app.state.download_manager.list()]
+    def list_downloads(target_rig_id: str | None = None) -> list[dict]:
+        return [job.model_dump(mode="json") for job in db.list_jobs(target_rig_id)]
 
     @app.get("/api/downloads/{job_id}")
     def get_download(job_id: str) -> dict:
@@ -232,16 +275,18 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="download job not found") from exc
 
     @app.delete("/api/downloads/terminal")
-    def cleanup_terminal_downloads() -> dict:
-        return {"removed": app.state.download_manager.cleanup_terminal_jobs()}
+    def cleanup_terminal_downloads(target_rig_id: str | None = None) -> dict:
+        return {"removed": app.state.download_manager.cleanup_terminal_jobs(target_rig_id)}
 
     @app.get("/api/models")
-    def list_models() -> list[dict]:
-        return [model.model_dump(mode="json") for model in db.list_models()]
+    def list_models(target_rig_id: str = DEFAULT_TARGET_RIG_ID) -> list[dict]:
+        return [model.model_dump(mode="json") for model in db.list_models(target_rig_id)]
 
     @app.get("/api/models/scan", response_model=list[FileInventoryItem])
-    def scan_models() -> list[FileInventoryItem]:
-        return scan_model_files(db.get_settings())
+    def scan_models(target_rig_id: str = DEFAULT_TARGET_RIG_ID) -> list[FileInventoryItem]:
+        settings = db.get_settings()
+        rig = _target_rig_or_404(db, target_rig_id)
+        return create_target_client(rig, settings).scan_model_files()
 
     @app.post("/api/models/from-download/{job_id}")
     def create_model_from_download(job_id: str, payload: CreateModelFromDownloadRequest) -> dict:
@@ -249,8 +294,11 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         if not job:
             raise HTTPException(status_code=404, detail="download job not found")
         try:
-            existing_ids = {model.id for model in db.list_models()}
-            model = model_from_download(job, payload, db.get_settings(), existing_ids)
+            settings = db.get_settings()
+            rig = _target_rig_or_404(db, job.target_rig_id)
+            client = create_target_client(rig, settings)
+            existing_ids = {model.id for model in db.list_models(job.target_rig_id)}
+            model = model_from_download(job, payload, effective_settings_for_rig(settings, rig), existing_ids, file_exists=client.is_file)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return db.save_model(model).model_dump(mode="json")
@@ -258,9 +306,11 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     @app.post("/api/models")
     def save_model(model: ManagedModel) -> dict:
         settings = db.get_settings()
+        rig = _target_rig_or_404(db, model.target_rig_id)
+        effective_settings = effective_settings_for_rig(settings, rig)
         if model.manager_files and not model.container_files:
             try:
-                model.container_files = [manager_to_llama_path(path, settings) for path in model.manager_files]
+                model.container_files = [manager_to_llama_path(path, effective_settings) for path in model.manager_files]
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
         if model.container_files and not model.primary_model_file:
@@ -271,18 +321,25 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     def config_preview(payload: ConfigPreviewRequest | None = None) -> dict:
         payload = payload or ConfigPreviewRequest()
         settings = db.get_settings()
-        all_models = db.list_models()
+        rig = _target_rig_or_404(db, payload.target_rig_id)
+        client = create_target_client(rig, settings)
+        effective_settings = effective_settings_for_rig(settings, rig)
+        all_models = db.list_models(rig.id)
         models = _select_models_for_preview(all_models, payload.model_ids)
-        current = _read_current_config(settings.llama_swap_config_path)
-        preview = preview_config(current, models, settings)
+        current = _read_current_config_from_target(client, rig.config_path)
+        preview = preview_config(current, models, effective_settings, validate_local_paths=rig.mode == "local")
+        if rig.mode == "ssh":
+            preview.errors.extend(_target_runtime_path_errors(client, rig, effective_settings))
+            preview.valid = not preview.errors
         if preview.valid:
             preview.stage_id = str(uuid.uuid4())
             db.save_staged_config(
                 preview.stage_id,
                 preview.yaml,
                 preview.diff,
-                fingerprint=_stage_fingerprint(current, models, settings),
+                fingerprint=_stage_fingerprint(current, models, effective_settings),
                 model_ids=[model.id for model in models],
+                target_rig_id=rig.id,
                 ttl_seconds=STAGED_CONFIG_TTL_SECONDS,
             )
         return preview.model_dump()
@@ -293,18 +350,28 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         if not staged:
             raise HTTPException(status_code=404, detail="staged config not found; regenerate preview before applying")
         settings = db.get_settings()
-        _validate_staged_config_for_apply(db, staged, settings, confirm_destructive=payload.confirm_destructive)
+        rig = _target_rig_or_404(db, str(staged.get("target_rig_id") or payload.target_rig_id or DEFAULT_TARGET_RIG_ID))
+        client = create_target_client(rig, settings)
+        effective_settings = effective_settings_for_rig(settings, rig)
+        _validate_staged_config_for_apply(db, staged, effective_settings, client, rig.config_path, confirm_destructive=payload.confirm_destructive)
         if not db.claim_staged_config(payload.stage_id):
             raise HTTPException(status_code=409, detail="staged config was already applied; regenerate preview")
         try:
-            backup = backup_and_apply_config(
-                settings.llama_swap_config_path,
-                settings.backups_dir,
-                staged["yaml"],
-                retention_count=settings.backup_retention_count,
-                retention_days=settings.backup_retention_days,
-            )
-        except (OSError, ValueError) as exc:
+            if rig.mode == "local":
+                backup = backup_and_apply_config(
+                    rig.config_path,
+                    rig.backups_dir,
+                    staged["yaml"],
+                    retention_count=effective_settings.backup_retention_count,
+                    retention_days=effective_settings.backup_retention_days,
+                )
+            else:
+                backup = client.apply_config(
+                    staged["yaml"],
+                    retention_count=effective_settings.backup_retention_count,
+                    retention_days=effective_settings.backup_retention_days,
+                )
+        except (OSError, ValueError, TargetRigError) as exc:
             raise HTTPException(status_code=409, detail=f"could not apply staged config: {exc}") from exc
         return {
             "applied": True,
@@ -314,22 +381,22 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         }
 
     @app.get("/api/config/backups")
-    def config_backups() -> list[dict]:
+    def config_backups(target_rig_id: str = DEFAULT_TARGET_RIG_ID) -> list[dict]:
         try:
-            return [backup.model_dump(mode="json") for backup in list_config_backups(db.get_settings().backups_dir)]
-        except (OSError, ValueError) as exc:
+            settings = db.get_settings()
+            rig = _target_rig_or_404(db, target_rig_id)
+            return [backup.model_dump(mode="json") for backup in create_target_client(rig, settings).list_backups()]
+        except (OSError, ValueError, TargetRigError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/config/restore")
     def config_restore(payload: ConfigRestoreRequest) -> dict:
         settings = db.get_settings()
+        rig = _target_rig_or_404(db, payload.target_rig_id)
+        client = create_target_client(rig, settings)
         try:
-            current_backup = restore_config_backup(
-                settings.llama_swap_config_path,
-                settings.backups_dir,
-                payload.backup_name,
-            )
-        except (OSError, ValueError) as exc:
+            current_backup = client.restore_config(payload.backup_name)
+        except (OSError, ValueError, TargetRigError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
             "restored": True,
@@ -340,46 +407,67 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         }
 
     @app.get("/api/config/import-candidates")
-    def config_import_candidates() -> list[dict]:
+    def config_import_candidates(target_rig_id: str = DEFAULT_TARGET_RIG_ID) -> list[dict]:
         settings = db.get_settings()
-        current = _read_current_config(settings.llama_swap_config_path)
-        candidates = import_candidates_from_config(current, settings)
+        rig = _target_rig_or_404(db, target_rig_id)
+        effective_settings = effective_settings_for_rig(settings, rig)
+        current = _read_current_config_from_target(create_target_client(rig, settings), rig.config_path)
+        candidates = import_candidates_from_config(current, effective_settings)
         return [candidate.model_dump(mode="json") for candidate in candidates]
 
     @app.post("/api/config/import-candidates")
     def config_import_selected(payload: ConfigImportRequest) -> list[dict]:
         settings = db.get_settings()
-        current = _read_current_config(settings.llama_swap_config_path)
-        candidates = import_candidates_from_config(current, settings)
+        rig = _target_rig_or_404(db, payload.target_rig_id)
+        effective_settings = effective_settings_for_rig(settings, rig)
+        current = _read_current_config_from_target(create_target_client(rig, settings), rig.config_path)
+        candidates = import_candidates_from_config(current, effective_settings)
         selected_ids = set(payload.candidate_ids)
         selected = [candidate for candidate in candidates if not selected_ids or candidate.id in selected_ids]
         imported = []
-        existing_ids = {model.id for model in db.list_models()}
+        existing_ids = {model.id for model in db.list_models(rig.id)}
         for candidate in selected:
             model = candidate.model
             model.id = _unique_import_id(model.id, existing_ids)
+            model.target_rig_id = rig.id
             imported.append(db.save_model(model).model_dump(mode="json"))
             existing_ids.add(model.id)
         return imported
 
     @app.post("/api/uploads")
-    async def upload_file(role: str, file: UploadFile, model_name: str = "") -> dict:
+    async def upload_file(role: str, file: UploadFile, model_name: str = "", target_rig_id: str = DEFAULT_TARGET_RIG_ID) -> dict:
         settings = db.get_settings()
+        rig = _target_rig_or_404(db, target_rig_id)
+        effective_settings = effective_settings_for_rig(settings, rig)
+        client = create_target_client(rig, settings)
         if role not in type(settings.role_directories).model_fields:
             raise HTTPException(status_code=400, detail="invalid role")
-        role_dir = getattr(settings.role_directories, role)
+        role_dir = getattr(effective_settings.role_directories, role)
         try:
-            role_root = safe_join(settings.manager_model_root, Path(role_dir).relative_to(settings.llama_swap_model_root))
-            destination = _safe_upload_destination(
-                role_root,
-                file.filename or "",
-                model_name,
-                settings.allowed_upload_extensions,
-            )
+            target_role_root = target_path_for_container_path(rig, role_dir)
+            if rig.mode == "local":
+                destination = _safe_upload_destination(
+                    Path(target_role_root),
+                    file.filename or "",
+                    model_name,
+                    settings.allowed_upload_extensions,
+                )
+            else:
+                destination = _safe_remote_upload_destination(
+                    target_role_root,
+                    file.filename or "",
+                    model_name,
+                    settings.allowed_upload_extensions,
+                )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        temp_destination = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.uploading")
+        temp_root = Path(rig.download_temp_dir if rig.mode == "local" else settings.download_temp_dir)
+        try:
+            temp_root.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            temp_root = Path(tempfile.gettempdir()) / "llama-swap-manager-uploads"
+            temp_root.mkdir(parents=True, exist_ok=True)
+        temp_destination = temp_root / f"{uuid.uuid4().hex}-{Path(str(destination)).name}.uploading"
         bytes_written = 0
         try:
             with temp_destination.open("wb") as output:
@@ -388,24 +476,29 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                     if bytes_written > settings.max_upload_bytes:
                         raise HTTPException(status_code=413, detail="upload exceeds max_upload_bytes")
                     output.write(chunk)
-            os.replace(temp_destination, destination)
+            written_path = client.upload_file(temp_destination, str(destination))
         except HTTPException:
             temp_destination.unlink(missing_ok=True)
             raise
-        except OSError as exc:
+        except (OSError, TargetRigError) as exc:
             temp_destination.unlink(missing_ok=True)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"manager_path": str(destination), "container_path": manager_to_llama_path(str(destination), settings)}
+        finally:
+            temp_destination.unlink(missing_ok=True)
+        return {"manager_path": written_path, "container_path": container_path_for_target_path(rig, written_path)}
 
     @app.get("/api/health")
-    def health(response: Response) -> dict:
+    def health(response: Response, target_rig_id: str = DEFAULT_TARGET_RIG_ID) -> dict:
         settings = db.get_settings()
+        rig = _target_rig_or_404(db, target_rig_id)
+        client = create_target_client(rig, settings)
         payload = {
             "app": {"status": "ok", "version": app.version},
             "db": _path_status(db.path),
-            "config": _path_status(Path(settings.llama_swap_config_path)),
-            "model_root": _path_status(Path(settings.manager_model_root)),
-            "backups": _path_status(Path(settings.backups_dir)),
+            "target_rig": rig.model_dump(mode="json"),
+            "config": client.path_status(rig.config_path),
+            "model_root": client.path_status(rig.model_root),
+            "backups": client.path_status(rig.backups_dir),
         }
         healthy = (
             payload["db"]["writable"]
@@ -466,6 +559,25 @@ def _safe_upload_destination(role_root: Path, filename: str, model_name: str, al
         raise ValueError("upload destination cannot be a symlink")
     if destination.exists() and not destination.is_file():
         raise ValueError("upload destination is not a file")
+    return destination
+
+
+def _safe_remote_upload_destination(role_root: str, filename: str, model_name: str, allowed_extensions: list[str]) -> str:
+    raw_name = filename.strip()
+    if not raw_name:
+        raise ValueError("upload filename is required")
+    candidate_name = Path(_safe_path_component(raw_name, "upload filename"))
+    allowed = {extension.lower() for extension in allowed_extensions}
+    if candidate_name.suffix.lower() not in allowed:
+        raise ValueError("unsupported upload extension")
+    model_dir = _safe_path_component(model_name.strip() or candidate_name.stem, "model directory")
+    root = posixpath.normpath(role_root)
+    if not root.startswith("/"):
+        raise ValueError("remote upload root must be absolute")
+    destination = posixpath.normpath(posixpath.join(root, model_dir, raw_name))
+    root_prefix = root.rstrip("/") + "/"
+    if destination != root and not destination.startswith(root_prefix):
+        raise ValueError(f"path escapes allowed root: {destination}")
     return destination
 
 
@@ -532,16 +644,74 @@ def _read_current_config(config_path: str) -> str:
         raise HTTPException(status_code=400, detail=f"could not read current config: {exc}") from exc
 
 
+def _target_rig_or_404(db: Database, target_rig_id: str | None) -> TargetRig:
+    rig = db.get_target_rig(target_rig_id or DEFAULT_TARGET_RIG_ID)
+    if not rig:
+        raise HTTPException(status_code=404, detail=f"target rig not found: {target_rig_id or DEFAULT_TARGET_RIG_ID}")
+    if not rig.enabled:
+        raise HTTPException(status_code=409, detail=f"target rig is disabled: {rig.id}")
+    return rig
+
+
+def _read_current_config_from_target(client, config_path: str) -> str:
+    try:
+        return client.read_text(config_path)
+    except (OSError, TargetRigError) as exc:
+        raise HTTPException(status_code=400, detail=f"could not read current config: {exc}") from exc
+
+
+def _target_runtime_path_errors(client, rig: TargetRig, settings: ManagerSettings) -> list[str]:
+    errors: list[str] = []
+
+    def status(path: str) -> dict:
+        return client.path_status(path)
+
+    try:
+        model_root = status(rig.model_root)
+        if not model_root.get("exists"):
+            errors.append(f"manager model root does not exist on target rig: {rig.model_root}")
+        elif not model_root.get("is_dir"):
+            errors.append(f"manager model root is not a directory on target rig: {rig.model_root}")
+        elif not model_root.get("writable"):
+            errors.append(f"manager model root is not writable on target rig: {rig.model_root}")
+        else:
+            free_gb = client.disk_free_bytes(rig.model_root) / (1024**3)
+            if free_gb < settings.disk_safety_gb:
+                errors.append(f"manager model root free space {free_gb:.1f}GB is below safety floor {settings.disk_safety_gb}GB")
+
+        for label, path in [("backup directory", rig.backups_dir), ("download temp directory", rig.download_temp_dir)]:
+            path_status = status(path)
+            if path_status.get("exists") and not path_status.get("is_dir"):
+                errors.append(f"{label} is not a directory on target rig: {path}")
+            elif path_status.get("exists") and not path_status.get("writable"):
+                errors.append(f"{label} is not writable on target rig: {path}")
+            elif not path_status.get("exists") and not path_status.get("writable"):
+                errors.append(f"{label} parent directory is not writable on target rig: {posixpath.dirname(path)}")
+
+        config_status = status(rig.config_path)
+        if config_status.get("exists") and config_status.get("is_dir"):
+            errors.append(f"config path is a directory on target rig: {rig.config_path}")
+        elif config_status.get("exists") and not config_status.get("writable"):
+            errors.append(f"config file is not writable on target rig: {rig.config_path}")
+        elif not config_status.get("exists") and not config_status.get("writable"):
+            errors.append(f"config parent directory is not writable on target rig: {posixpath.dirname(rig.config_path)}")
+    except (OSError, ValueError, TargetRigError) as exc:
+        errors.append(f"target rig path validation failed: {exc}")
+    return errors
+
+
 def _validate_staged_config_for_apply(
     db: Database,
     staged: dict,
     settings: ManagerSettings,
+    client,
+    config_path: str,
     confirm_destructive: bool = False,
 ) -> None:
     if staged.get("applied_at"):
         raise HTTPException(status_code=409, detail="staged config was already applied; regenerate preview")
     try:
-        current = _read_current_config(settings.llama_swap_config_path)
+        current = _read_current_config_from_target(client, config_path)
     except HTTPException as exc:
         if exc.status_code == 400:
             raise HTTPException(status_code=409, detail=f"could not validate current config: {exc.detail}") from exc
@@ -580,7 +750,7 @@ def _models_for_stage(db: Database, staged: dict) -> list[ManagedModel]:
         model_ids = [str(model_id) for model_id in raw_model_ids]
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=409, detail="staged config metadata is invalid; regenerate preview") from exc
-    models = db.list_models()
+    models = db.list_models(str(staged.get("target_rig_id") or DEFAULT_TARGET_RIG_ID))
     if not model_ids:
         return []
     by_id = {model.id: model for model in models}

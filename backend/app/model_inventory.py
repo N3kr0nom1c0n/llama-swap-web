@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path, PurePosixPath
+from collections.abc import Callable
 
 from .config_service import default_matrix_key, manager_to_llama_path
 from .hf_service import classify_file
@@ -48,6 +49,7 @@ def model_from_download(
     request: CreateModelFromDownloadRequest,
     settings: ManagerSettings,
     existing_model_ids: set[str],
+    file_exists: Callable[[str], bool] | None = None,
 ) -> ManagedModel:
     if job.status != "completed":
         raise ValueError("download job must be completed before it can create a model")
@@ -64,12 +66,13 @@ def model_from_download(
         raise ValueError(f"incomplete download job is missing file(s): {', '.join(sorted(missing_expected))}")
     for raw_path in job.written_files:
         path = Path(raw_path)
-        if not path.exists():
+        exists = file_exists(raw_path) if file_exists else path.exists()
+        if not exists:
             raise ValueError(f"downloaded file is missing: {raw_path}")
-        if not path.is_file():
+        if not file_exists and not path.is_file():
             raise ValueError(f"downloaded path is not a file: {raw_path}")
-        manager_files.append(str(path.resolve()))
-        container_files.append(manager_to_llama_path(str(path), settings))
+        manager_files.append(str(path.resolve()) if not file_exists else raw_path)
+        container_files.append(job.container_files[len(container_files)] if job.container_files else manager_to_llama_path(str(path), settings))
 
     display_name = request.display_name.strip() or Path(job.destination_dir).name or job.repo_id.split("/")[-1] or "model"
     requested_id = request.id.strip()
@@ -93,6 +96,7 @@ def model_from_download(
     return ManagedModel(
         id=model_id,
         display_name=display_name,
+        target_rig_id=job.target_rig_id,
         role=role,
         source_type="hf",
         hf_url=f"https://huggingface.co/{job.repo_id}" if job.repo_id else "",

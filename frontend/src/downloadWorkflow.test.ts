@@ -13,6 +13,7 @@ describe("download workflow helpers", () => {
 function jobWithFiles(paths: string[]): DownloadJob {
   return {
     id: "job",
+    target_rig_id: "default",
     status: "completed",
     repo_id: "org/repo",
     revision: "main",

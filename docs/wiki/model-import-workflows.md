@@ -1,6 +1,6 @@
 # Model Import Workflows
 
-The app supports four model sources: Hugging Face repo URLs, direct Hugging Face file URLs, browser uploads, and existing files already under `/models`.
+The app supports four model sources: Hugging Face repo URLs, direct Hugging Face file URLs, browser uploads, and existing files already under the selected target rig's model root.
 
 ## Hugging Face Repo URL
 
@@ -12,7 +12,7 @@ https://huggingface.co/org/model-repo
 
 The resolver lists files and classifies them as GGUF, multipart GGUF shard, mmproj, chat template, tokenizer, or other. For quantized repos, choose the quant family you actually want. Do not download every quant in a large repo unless that is deliberate.
 
-`Preview Destination` shows the target install directory before the download starts. New imports use a per-model layout under `/models/<role>/<model-id>/` so support files such as `mmproj-F16.gguf` and `chat_template.jinja` do not collide across models.
+`Preview Destination` shows the selected target rig install directory before the download starts. In SSH mode that path is on the remote rig, not the manager host. New imports use a per-model layout under `/models/<role>/<model-id>/` as seen by llama-swap so support files such as `mmproj-F16.gguf` and `chat_template.jinja` do not collide across models.
 
 ## Direct Hugging Face File URL
 
@@ -46,7 +46,7 @@ Uploads are for local files already on your browser machine. The manager streams
 
 ## Existing Files
 
-Use the model scanner when GGUF files already exist under `/models`. The scanner ignores unsafe symlinks and only returns supported model/companion file types.
+Use the model scanner when GGUF files already exist under the selected target rig's model root. The scanner ignores unsafe symlinks and only returns supported model/companion file types.
 
 After scanning, use `Create model` on the primary GGUF. The manager fills the managed model entry from that path so you do not need to copy the file into the Models form manually.
 

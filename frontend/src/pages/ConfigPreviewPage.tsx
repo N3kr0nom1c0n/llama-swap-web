@@ -6,45 +6,48 @@ import { CodeBlock } from "../components/CodeBlock";
 import { PageHeader } from "../components/PageHeader";
 import { StatusPill } from "../components/StatusPill";
 import { queryKeys } from "../queryKeys";
+import { useTargetRig } from "../targetRigContext";
 
 export function ConfigPreviewPage() {
   const queryClient = useQueryClient();
+  const { targetRigId, selectedRig } = useTargetRig();
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [confirmDestructive, setConfirmDestructive] = useState(false);
-  const models = useQuery({ queryKey: queryKeys.models, queryFn: api.models });
-  const backups = useQuery({ queryKey: queryKeys.configBackups, queryFn: api.configBackups });
+  const models = useQuery({ queryKey: queryKeys.modelsFor(targetRigId), queryFn: () => api.models(targetRigId) });
+  const backups = useQuery({ queryKey: queryKeys.configBackupsFor(targetRigId), queryFn: () => api.configBackups(targetRigId) });
   const runtime = useQuery({
-    queryKey: queryKeys.llamaSwapStatus,
-    queryFn: api.llamaSwapStatus,
+    queryKey: queryKeys.llamaSwapStatusFor(targetRigId),
+    queryFn: () => api.llamaSwapStatus(targetRigId),
     refetchInterval: 10000,
   });
   const preview = useQuery({
-    queryKey: [...queryKeys.preview, selectedIds],
-    queryFn: () => api.previewConfig(selectedIds),
+    queryKey: queryKeys.previewFor(targetRigId, selectedIds),
+    queryFn: () => api.previewConfig(selectedIds, targetRigId),
   });
   const apply = useMutation({
     mutationFn: () => {
       if (!preview.data?.stage_id) throw new Error("Regenerate a valid preview before applying.");
-      return api.applyConfig(preview.data.stage_id, confirmDestructive);
+      return api.applyConfig(preview.data.stage_id, confirmDestructive, targetRigId);
     },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.state });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.preview });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.stateFor(targetRigId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.previewFor(targetRigId, selectedIds) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.configBackupsFor(targetRigId) });
     },
   });
   const restore = useMutation({
-    mutationFn: api.restoreConfig,
+    mutationFn: (backupName: string) => api.restoreConfig(backupName, targetRigId),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.state });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.preview });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.configBackups });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.stateFor(targetRigId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.previewFor(targetRigId, selectedIds) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.configBackupsFor(targetRigId) });
     },
   });
   const restart = useMutation({
-    mutationFn: api.restartLlamaSwap,
+    mutationFn: () => api.restartLlamaSwap(targetRigId),
     onSuccess: (data) => {
-      queryClient.setQueryData(queryKeys.llamaSwapStatus, data.status);
-      void queryClient.invalidateQueries({ queryKey: queryKeys.llamaSwapStatus });
+      queryClient.setQueryData(queryKeys.llamaSwapStatusFor(targetRigId), data.status);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.llamaSwapStatusFor(targetRigId) });
     },
   });
   const destructiveChanges = preview.data?.destructive_changes ?? [];
@@ -62,7 +65,7 @@ export function ConfigPreviewPage() {
     <div className="page">
       <PageHeader
         title="Config Preview"
-        description="Validate generated llama-swap YAML, inspect diff, back up, and apply staged config."
+        description={`Validate generated YAML, inspect diff, back up, and apply on ${selectedRig?.name ?? "the selected target rig"}.`}
         actions={
           <>
             <button className="button secondary" onClick={() => void preview.refetch()} type="button">

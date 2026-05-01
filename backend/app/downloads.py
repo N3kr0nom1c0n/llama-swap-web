@@ -12,8 +12,9 @@ from typing import Any
 from .config_service import manager_to_llama_path, safe_join
 from .database import Database
 from .hf_service import HfFileInfo, download_selected_files, get_hf_file_info
-from .schemas import DownloadJob, DownloadRequest
+from .schemas import DEFAULT_TARGET_RIG_ID, DownloadJob, DownloadRequest, TargetRig
 from .settings import ManagerSettings, get_hf_token
+from .target_rig_service import create_target_client, terminate_process_tree
 
 
 class DownloadCancelled(Exception):
@@ -23,6 +24,34 @@ class DownloadCancelled(Exception):
 def _download_worker(result_queue: multiprocessing.Queue, kwargs: dict[str, Any]) -> None:
     try:
         written = download_selected_files(**kwargs)
+        result_queue.put({"ok": True, "written": written})
+    except Exception as exc:
+        result_queue.put({"ok": False, "error": str(exc)})
+
+
+def _ssh_download_worker(
+    result_queue: multiprocessing.Queue,
+    progress_queue: multiprocessing.Queue,
+    rig_json: str,
+    settings_json: str,
+    kwargs: dict[str, Any],
+) -> None:
+    try:
+        rig = TargetRig.model_validate_json(rig_json)
+        settings = ManagerSettings.model_validate_json(settings_json)
+        client = create_target_client(rig, settings)
+
+        def on_file_complete(path: str, index: int) -> None:
+            progress_queue.put({"path": path, "index": index})
+
+        written = client.download_hf_files(
+            repo_id=str(kwargs["repo_id"]),
+            revision=str(kwargs["revision"]),
+            files=list(kwargs["files"]),
+            destination_dir=str(kwargs["destination_dir"]),
+            token=kwargs.get("token"),
+            on_file_complete=on_file_complete,
+        )
         result_queue.put({"ok": True, "written": written})
     except Exception as exc:
         result_queue.put({"ok": False, "error": str(exc)})
@@ -45,11 +74,12 @@ class DownloadManager:
         job = DownloadJob(
             id=str(uuid.uuid4()),
             status="queued",
+            target_rig_id=request.target_rig_id or DEFAULT_TARGET_RIG_ID,
             repo_id=request.repo_id,
             revision=request.revision,
             files=request.files,
             destination_dir=request.destination_dir,
-            container_dir=self._container_dir_for_destination(request.destination_dir),
+            container_dir=self._container_dir_for_destination(request.destination_dir, request.target_rig_id),
             logs=["queued download job"],
         )
         self.db.save_job(job)
@@ -64,8 +94,8 @@ class DownloadManager:
             self.settings = settings
             self._slot_available.notify_all()
 
-    def cleanup_terminal_jobs(self) -> int:
-        terminal_job_ids = [job.id for job in self.db.list_jobs() if job.status in {"completed", "failed", "cancelled"}]
+    def cleanup_terminal_jobs(self, target_rig_id: str | None = None) -> int:
+        terminal_job_ids = [job.id for job in self.db.list_jobs(target_rig_id) if job.status in {"completed", "failed", "cancelled"}]
         if not terminal_job_ids:
             return 0
         with self.db.connect() as conn:
@@ -99,6 +129,7 @@ class DownloadManager:
                 revision=job.revision,
                 files=job.files,
                 destination_dir=job.destination_dir,
+                target_rig_id=job.target_rig_id,
                 model_id="",
             )
         )
@@ -107,7 +138,7 @@ class DownloadManager:
         for job in self.db.list_jobs():
             if job.status == "queued":
                 if not job.container_dir:
-                    job.container_dir = self._container_dir_for_destination(job.destination_dir)
+                    job.container_dir = self._container_dir_for_destination(job.destination_dir, job.target_rig_id)
                 job.logs.append("resumed queued job after manager startup")
                 self.db.save_job(job)
                 self._start_thread(job.id)
@@ -146,8 +177,12 @@ class DownloadManager:
                 self.db.save_job(job)
                 return
             token = get_hf_token(self.settings) or False
+            rig = self._target_rig(job.target_rig_id)
+            if not rig:
+                raise RuntimeError(f"target rig not found: {job.target_rig_id}")
+            client = create_target_client(rig, self.settings)
             file_info = self._file_info(job, token)
-            self._preflight_disk_space(job, file_info)
+            self._preflight_disk_space(job, file_info, client)
             job.status = "running"
             job.logs.append(f"downloading {len(job.files)} file(s) from {job.repo_id}")
             job.progress = 5
@@ -158,7 +193,7 @@ class DownloadManager:
                 "revision": job.revision,
                 "files": job.files,
                 "destination_dir": destination,
-                "model_root": self.settings.manager_model_root,
+                "model_root": rig.model_root,
                 "token": token,
             }
             if file_info:
@@ -166,7 +201,7 @@ class DownloadManager:
                 job.bytes_downloaded = 0
                 job.active_file = file_info[0].path
                 self.db.save_job(job)
-            written = self._download(job_id, kwargs, file_info)
+            written = self._download(job_id, kwargs, file_info, client)
             if job_id in self._cancelled:
                 job.status = "cancelled"
                 job.logs.append("cancelled after transfer returned; downloaded files were not attached to job")
@@ -176,8 +211,10 @@ class DownloadManager:
             job.bytes_downloaded = job.bytes_total
             job.active_file = ""
             job.written_files = written
-            job.container_dir = job.container_dir or self._container_dir_for_destination(job.destination_dir)
-            job.container_files = [manager_to_llama_path(path, self.settings) for path in written]
+            job.container_dir = job.container_dir or self._container_dir_for_destination(job.destination_dir, job.target_rig_id)
+            from .target_rig_service import container_path_for_target_path
+
+            job.container_files = [container_path_for_target_path(rig, path) for path in written]
             job.logs.append(f"downloaded {len(written)} file(s)")
         except Exception as exc:
             if job_id in self._cancelled:
@@ -197,13 +234,32 @@ class DownloadManager:
                 self._release_download_slot()
             self._forget_job_tracking(job_id)
 
-    def _container_dir_for_destination(self, destination_dir: str) -> str:
+    def _container_dir_for_destination(self, destination_dir: str, target_rig_id: str = DEFAULT_TARGET_RIG_ID) -> str:
         try:
+            rig = self._target_rig(target_rig_id)
+            if rig:
+                from .target_rig_service import container_path_for_target_path
+
+                return container_path_for_target_path(rig, destination_dir)
             destination = Path(destination_dir)
             manager_path = destination if destination.is_absolute() else safe_join(self.settings.manager_model_root, destination_dir)
             return manager_to_llama_path(str(manager_path), self.settings)
         except ValueError:
             return ""
+
+    def _target_rig(self, target_rig_id: str = DEFAULT_TARGET_RIG_ID):
+        rig = self.db.get_target_rig(target_rig_id)
+        if rig and rig.id == DEFAULT_TARGET_RIG_ID and rig.mode == "local":
+            return rig.model_copy(
+                update={
+                    "model_root": self.settings.manager_model_root,
+                    "llama_swap_model_root": self.settings.llama_swap_model_root,
+                    "config_path": self.settings.llama_swap_config_path,
+                    "backups_dir": self.settings.backups_dir,
+                    "download_temp_dir": self.settings.download_temp_dir,
+                }
+            )
+        return rig
 
     def _forget_job_tracking(self, job_id: str) -> None:
         with self._lock:
@@ -233,16 +289,20 @@ class DownloadManager:
             self.db.save_job(job)
             return []
 
-    def _preflight_disk_space(self, job: DownloadJob, file_info: list[HfFileInfo]) -> None:
+    def _preflight_disk_space(self, job: DownloadJob, file_info: list[HfFileInfo], client=None) -> None:
         bytes_total = sum(max(0, item.size) for item in file_info)
         if bytes_total <= 0:
             return
         destination = Path(job.destination_dir)
-        if not destination.is_absolute():
-            destination = safe_join(self.settings.manager_model_root, job.destination_dir)
-        usage_path = self._existing_disk_usage_path(destination)
-        usage = shutil.disk_usage(usage_path)
-        free_bytes = usage.free if hasattr(usage, "free") else usage[2]
+        if client is not None:
+            usage_path = Path(job.destination_dir)
+            free_bytes = client.disk_free_bytes(job.destination_dir)
+        else:
+            if not destination.is_absolute():
+                destination = safe_join(self.settings.manager_model_root, job.destination_dir)
+            usage_path = self._existing_disk_usage_path(destination)
+            usage = shutil.disk_usage(usage_path)
+            free_bytes = usage.free if hasattr(usage, "free") else usage[2]
         safety_bytes = max(0, int(self.settings.disk_safety_gb)) * 1024**3
         required_bytes = bytes_total + safety_bytes
         if free_bytes >= required_bytes:
@@ -260,7 +320,9 @@ class DownloadManager:
             candidate = candidate.parent
         return candidate
 
-    def _download(self, job_id: str, kwargs: dict[str, Any], file_info: list[HfFileInfo] | None = None) -> list[str]:
+    def _download(self, job_id: str, kwargs: dict[str, Any], file_info: list[HfFileInfo] | None = None, client=None) -> list[str]:
+        if client is not None and client.rig.mode == "ssh":
+            return self._download_ssh_process(job_id, kwargs, client.rig)
         if not self.run_in_process:
             return download_selected_files(**kwargs)
         context = multiprocessing.get_context("spawn")
@@ -296,6 +358,57 @@ class DownloadManager:
                 self._processes.pop(job_id, None)
             result_queue.close()
 
+    def _download_ssh_process(self, job_id: str, kwargs: dict[str, Any], rig: TargetRig) -> list[str]:
+        context = multiprocessing.get_context("spawn")
+        result_queue = context.Queue()
+        progress_queue = context.Queue()
+        process = context.Process(
+            target=_ssh_download_worker,
+            args=(result_queue, progress_queue, rig.model_dump_json(), self.settings.model_dump_json(), kwargs),
+            daemon=True,
+        )
+        with self._lock:
+            self._processes[job_id] = process
+        process.start()
+        try:
+            while process.is_alive():
+                if job_id in self._cancelled:
+                    self._terminate_process(process)
+                    raise DownloadCancelled("remote ssh download process terminated after cancel request")
+                self._drain_ssh_progress(job_id, progress_queue)
+                time.sleep(0.25)
+            self._drain_ssh_progress(job_id, progress_queue)
+            process.join(timeout=1)
+            try:
+                result = result_queue.get(timeout=2)
+            except queue.Empty as exc:
+                if process.exitcode == 0:
+                    raise RuntimeError("ssh download process exited without returning a result") from exc
+                raise RuntimeError(f"ssh download process exited with code {process.exitcode}") from exc
+            if result.get("ok"):
+                return list(result.get("written", []))
+            raise RuntimeError(str(result.get("error") or "ssh download failed"))
+        finally:
+            with self._lock:
+                self._processes.pop(job_id, None)
+            result_queue.close()
+            progress_queue.close()
+
+    def _drain_ssh_progress(self, job_id: str, progress_queue: multiprocessing.Queue) -> None:
+        while True:
+            try:
+                event = progress_queue.get_nowait()
+            except queue.Empty:
+                return
+            job = self.db.get_job(job_id)
+            if not job:
+                continue
+            total_files = max(1, len(job.files))
+            index = int(event.get("index") or 0)
+            job.active_file = Path(str(event.get("path") or "")).name
+            job.progress = round(min(99, max(5, (index / total_files) * 95)), 1)
+            self.db.save_job(job)
+
     def _update_progress_from_cache(self, job_id: str, file_info: list[HfFileInfo]) -> None:
         job = self.db.get_job(job_id)
         if not job or job.status != "running":
@@ -320,8 +433,4 @@ class DownloadManager:
         self.db.save_job(job)
 
     def _terminate_process(self, process: multiprocessing.Process) -> None:
-        process.terminate()
-        process.join(timeout=5)
-        if process.is_alive():
-            process.kill()
-            process.join(timeout=2)
+        terminate_process_tree(process)

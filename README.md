@@ -2,13 +2,14 @@
 
 LAN web app for importing Hugging Face GGUF models onto an AI rig, staging llama-swap model entries, and generating `config.yaml` changes before you apply them.
 
-The app is intentionally local/LAN focused. Version 1 has no login and does not restart llama-swap automatically after config apply. Optional manual restart controls can be enabled if you explicitly mount the Docker socket into the manager container. It downloads and writes models through the manager container, stores app state in SQLite, and keeps Hugging Face tokens out of API responses.
+The app is intentionally LAN focused. Version 1 has no login. Production use is SSH-first: the manager can run on one machine while one or more target rigs receive the downloads, config writes, GPU checks, and restart commands over SSH. Local bind-mounted mode still exists for single-host installs. It stores app state in SQLite and keeps Hugging Face tokens out of API responses.
 
 ## What It Does
 
 - Resolve Hugging Face model or file URLs and classify GGUF files, multipart shards, mmproj files, chat templates, and tokenizer-side files.
-- Download selected files directly on the rig into per-model directories under `/models/<role>/<model-id>/`.
-- Upload local model files into the mounted model root.
+- Manage multiple target rigs from Settings, including SSH host, key path, model root, config path, backups path, health check, and restart command.
+- Download selected files directly on the selected target rig into per-model directories under `/models/<role>/<model-id>/`.
+- Upload local model files through the manager and stream them onto the selected target rig.
 - Track queued/running/completed/cancelled download jobs with progress.
 - Turn completed downloads or existing scanned `/models` files into managed model entries without copying paths.
 - Show Dashboard next actions for active downloads, failed jobs, downloaded-but-unconfigured files, and config blockers.
@@ -16,12 +17,12 @@ The app is intentionally local/LAN focused. Version 1 has no login and does not 
 - Generate a llama-swap `matrix` config preview with a unified diff.
 - Validate staged YAML, create a timestamped backup, and apply the config only after approval.
 - List and restore config backups from the UI when a generated config needs rollback.
-- Optionally restart the configured llama-swap container from Config Preview after you enable Docker socket access in Settings.
+- Optionally restart llama-swap from Config Preview using the selected target rig's SSH restart command, or Docker socket controls in local single-host mode.
 - Provide a built-in Help page that explains every app area and the important model settings.
 
 ## Recommended Docker Install
 
-Docker Compose is the recommended deployment path. It keeps the app self-contained while still letting it write to your existing model root and llama-swap config file through bind mounts.
+Docker Compose is the recommended deployment path. The manager stays self-contained; for a remote llama-swap rig, mount only manager state, `.env`, and an SSH key. Model files and config are written on the target rig over SSH.
 
 1. Copy the example files:
 
@@ -38,13 +39,16 @@ Docker Compose is the recommended deployment path. It keeps the app self-contain
    HF_TOKEN=hf_your_token_here
    ```
 
-3. Prepare writable host paths for the container user.
+3. Prepare writable manager paths for the container user.
 
-   The published image runs as UID/GID `10001:10001`. The bind-mounted model root, llama-swap config file, and backup directory must be writable by that ID:
+   The published image runs as UID/GID `10001:10001`. The manager data directory, local `.env`, and any mounted SSH key directory must be readable or writable as appropriate by that ID:
 
    ```sh
-   sudo chown -R 10001:10001 /path/to/llama.cpp/models /path/to/llama-swap/backups
-   sudo chown 10001:10001 /path/to/llama-swap/config.yaml
+   sudo mkdir -p ./data ./ssh
+   sudo chown -R 10001:10001 ./data .env
+   sudo chown -R 10001:10001 ./ssh
+   chmod 700 ./ssh
+   chmod 600 ./ssh/id_ed25519
    ```
 
    If you want the Settings page to save or clear `HF_TOKEN`, make the local `.env` file writable by the same ID too:
@@ -53,20 +57,31 @@ Docker Compose is the recommended deployment path. It keeps the app self-contain
    sudo chown 10001:10001 .env
    ```
 
-4. Edit `compose.yml` and point the mounts at your rig paths:
+4. Edit `compose.yml` for SSH-first remote rig management:
 
    ```yaml
    volumes:
      - ./.env:/app/.env
-     - /path/to/llama.cpp/models:/models
-     - /path/to/llama-swap/config.yaml:/app/config.yaml
-     - /path/to/llama-swap/backups:/backups
+     - ./ssh:/data/ssh:ro
      - llama-swap-manager-data:/data
    ```
 
-   The manager command generator should use container paths such as `/models/chat/...`, not host paths. That is why the model root is mounted at `/models`. Runtime temp files and Hugging Face cache data live under `/data/tmp` and `/data/hf-cache` in the named data volume; do not bind-mount host `/tmp` into the container.
+   In Settings -> Target Rigs, create an SSH rig:
 
-   Optional restart controls require one extra bind mount and explicit settings:
+   - Host: `192.168.42.40`
+   - Username: your rig user, for example `n3kr0`
+   - SSH key path: `/data/ssh/id_ed25519`
+   - Target model root: the real directory on the rig, for example `/home/n3kr0/Repos/llama.cpp/models`
+   - llama-swap model root: the path used inside llama-swap commands, usually `/models`
+   - Target config path: the real config file on the rig, for example `/home/n3kr0/Repos/llama-swap/config.yaml`
+   - Target backups dir: durable backup path on the rig
+   - Restart command: for example `docker restart llama-swap` or `docker compose -f /home/n3kr0/Repos/llama-swap/docker-compose.yml restart llama-swap`
+
+   Generated llama-swap commands should use container paths such as `/models/chat/...`, not host paths. The target model root controls where SSH writes bytes on the rig; the llama-swap model root controls what path appears in `config.yaml`.
+
+   For single-host local mode only, bind mount your model root, config file, and backup directory into the manager container and keep the default local target rig.
+
+   Optional Docker socket restart controls are only for local single-host mode. SSH target rigs should use the target rig restart command instead. If you still need local Docker socket restart, add:
 
    ```yaml
    group_add:

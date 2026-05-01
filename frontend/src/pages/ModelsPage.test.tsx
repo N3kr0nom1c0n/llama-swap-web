@@ -50,6 +50,7 @@ const settingsPayload: ManagerSettings = {
 const modelPayload: ManagedModel = {
   id: "tiny-chat",
   display_name: "Tiny Chat",
+  target_rig_id: "default",
   role: "chat",
   source_type: "manual",
   hf_url: "",

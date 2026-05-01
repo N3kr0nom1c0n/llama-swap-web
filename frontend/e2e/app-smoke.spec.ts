@@ -88,11 +88,11 @@ test("settings token control does not render raw token text", async ({ page }) =
 test("help page supports search and section navigation", async ({ page }) => {
   await page.goto("/help");
 
-  await expect(page.getByRole("heading", { name: /^help$/i })).toBeVisible();
-  await page.getByLabel(/search help/i).fill("gpu");
+  await expect(page.getByRole("heading", { name: /^manager wiki$/i })).toBeVisible();
+  await page.getByLabel(/search wiki/i).fill("gpu");
   await expect(page.getByTestId("help-results")).toContainText(/gpu/i);
 
-  const firstSectionLink = page.locator('[aria-label="Help sections"] a').first();
+  const firstSectionLink = page.locator('[aria-label="Wiki navigation"] a').first();
   await expect(firstSectionLink).toBeVisible();
   await firstSectionLink.click();
   await expect(page).toHaveURL(/\/help#/);

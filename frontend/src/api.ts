@@ -18,6 +18,7 @@ import type {
   ModelRole,
   SourceType,
   StateResponse,
+  TargetRig,
 } from "./types";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -39,21 +40,28 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  state: () => request<StateResponse>("/api/state"),
+  state: (targetRigId = "default") => request<StateResponse>(withTarget("/api/state", targetRigId)),
   settings: () => request<ManagerSettings>("/api/settings"),
   saveSettings: (settings: ManagerSettings) =>
     request<ManagerSettings>("/api/settings", { method: "PUT", body: JSON.stringify(stripUiOnlySettings(settings)) }),
   saveHfToken: (token: string) =>
     request<ManagerSettings>("/api/settings/hf-token", { method: "PUT", body: JSON.stringify({ token }) }),
   clearHfToken: () => request<ManagerSettings>("/api/settings/hf-token", { method: "DELETE" }),
-  llamaSwapStatus: () => request<LlamaSwapRuntimeStatus>("/api/llama-swap/status"),
-  restartLlamaSwap: () => request<LlamaSwapRestartResponse>("/api/llama-swap/restart", { method: "POST" }),
-  gpus: () => request<GpuDevice[]>("/api/gpus"),
-  saveGpus: (gpus: GpuDevice[]) => request<GpuDevice[]>("/api/gpus", { method: "PUT", body: JSON.stringify(gpus) }),
-  detectGpus: () => request<GpuDetectionResponse>("/api/gpus/detect"),
-  gpuStatus: () => request<GpuDetectionResponse & { processes: unknown[] }>("/api/gpus/status"),
-  recommendGpus: (cudaDevices: number[]) =>
-    request<GpuRecommendationResponse>("/api/gpus/recommend", { method: "POST", body: JSON.stringify({ cuda_devices: cudaDevices }) }),
+  targetRigs: () => request<TargetRig[]>("/api/target-rigs"),
+  saveTargetRig: (rig: TargetRig) => request<TargetRig>("/api/target-rigs", { method: "POST", body: JSON.stringify(rig) }),
+  targetRigHealth: (targetRigId = "default") => request<Record<string, unknown>>(`/api/target-rigs/${encodeURIComponent(targetRigId)}/health`),
+  llamaSwapStatus: (targetRigId = "default") => request<LlamaSwapRuntimeStatus>(withTarget("/api/llama-swap/status", targetRigId)),
+  restartLlamaSwap: (targetRigId = "default") => request<LlamaSwapRestartResponse>(withTarget("/api/llama-swap/restart", targetRigId), { method: "POST" }),
+  gpus: (targetRigId = "default") => request<GpuDevice[]>(withTarget("/api/gpus", targetRigId)),
+  saveGpus: (gpus: GpuDevice[], targetRigId = "default") =>
+    request<GpuDevice[]>(withTarget("/api/gpus", targetRigId), { method: "PUT", body: JSON.stringify(gpus.map((gpu) => ({ ...gpu, target_rig_id: targetRigId }))) }),
+  detectGpus: (targetRigId = "default") => request<GpuDetectionResponse>(withTarget("/api/gpus/detect", targetRigId)),
+  gpuStatus: (targetRigId = "default") => request<GpuDetectionResponse & { processes: unknown[] }>(withTarget("/api/gpus/status", targetRigId)),
+  recommendGpus: (cudaDevices: number[], targetRigId = "default") =>
+    request<GpuRecommendationResponse>("/api/gpus/recommend", {
+      method: "POST",
+      body: JSON.stringify(targetRigId === "default" ? { cuda_devices: cudaDevices } : { target_rig_id: targetRigId, cuda_devices: cudaDevices }),
+    }),
   resolveHf: (url: string, revision: string) =>
     request<HfResolveResponse>("/api/hf/resolve", { method: "POST", body: JSON.stringify({ url, revision }) }),
   createImport: (payload: {
@@ -64,21 +72,23 @@ export const api = {
     selected_files?: string[];
     desired_name?: string;
     gpu_devices?: number[];
-  }) => request<{ destination_dir: string; container_dir: string; selected_files: string[] }>("/api/imports", { method: "POST", body: JSON.stringify(payload) }),
+    target_rig_id?: string;
+  }) => request<{ target_rig_id: string; destination_dir: string; container_dir: string; selected_files: string[] }>("/api/imports", { method: "POST", body: JSON.stringify(payload) }),
   startDownload: (payload: {
+    target_rig_id?: string;
     repo_id: string;
     revision: string;
     files: string[];
     destination_dir: string;
     model_id?: string;
   }) => request<DownloadJob>("/api/downloads", { method: "POST", body: JSON.stringify(payload) }),
-  downloads: () => request<DownloadJob[]>("/api/downloads"),
+  downloads: (targetRigId?: string) => request<DownloadJob[]>(targetRigId ? withTarget("/api/downloads", targetRigId) : "/api/downloads"),
   download: (id: string) => request<DownloadJob>(`/api/downloads/${encodeURIComponent(id)}`),
   cancelDownload: (id: string) => request<DownloadJob>(`/api/downloads/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
   retryDownload: (id: string) => request<DownloadJob>(`/api/downloads/${encodeURIComponent(id)}/retry`, { method: "POST" }),
-  cleanupTerminalDownloads: () => request<{ removed: number }>("/api/downloads/terminal", { method: "DELETE" }),
-  models: () => request<ManagedModel[]>("/api/models"),
-  scanModels: () => request<FileInventoryItem[]>("/api/models/scan"),
+  cleanupTerminalDownloads: (targetRigId?: string) => request<{ removed: number }>(targetRigId ? withTarget("/api/downloads/terminal", targetRigId) : "/api/downloads/terminal", { method: "DELETE" }),
+  models: (targetRigId?: string) => request<ManagedModel[]>(targetRigId ? withTarget("/api/models", targetRigId) : "/api/models"),
+  scanModels: (targetRigId = "default") => request<FileInventoryItem[]>(withTarget("/api/models/scan", targetRigId)),
   saveModel: (model: ManagedModel) =>
     request<ManagedModel>("/api/models", { method: "POST", body: JSON.stringify(normalizeModel(model)) }),
   createModelFromDownload: (jobId: string, payload: CreateModelFromDownloadPayload) =>
@@ -86,25 +96,37 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  previewConfig: (modelIds: string[] = []) =>
-    request<ConfigPreviewResponse>("/api/config/preview", { method: "POST", body: JSON.stringify({ model_ids: modelIds }) }),
-  applyConfig: (stageId: string, confirmDestructive = false) =>
-    request<ApplyResponse>("/api/config/apply", { method: "POST", body: JSON.stringify({ stage_id: stageId, confirm_destructive: confirmDestructive }) }),
-  configBackups: () => request<ConfigBackupMetadata[]>("/api/config/backups"),
-  restoreConfig: (backupName: string) =>
-    request<ConfigRestoreResponse>("/api/config/restore", { method: "POST", body: JSON.stringify({ backup_name: backupName }) }),
-  configImportCandidates: () => request<ConfigImportCandidate[]>("/api/config/import-candidates"),
-  importConfigCandidates: (candidateIds: string[]) =>
-    request<ManagedModel[]>("/api/config/import-candidates", { method: "POST", body: JSON.stringify({ candidate_ids: candidateIds }) }),
-  upload: (role: ModelRole, file: File) => {
+  previewConfig: (modelIds: string[] = [], targetRigId = "default") =>
+    request<ConfigPreviewResponse>("/api/config/preview", { method: "POST", body: JSON.stringify(withTargetBody(targetRigId, { model_ids: modelIds })) }),
+  applyConfig: (stageId: string, confirmDestructive = false, targetRigId = "default") =>
+    request<ApplyResponse>("/api/config/apply", { method: "POST", body: JSON.stringify(withTargetBody(targetRigId, { stage_id: stageId, confirm_destructive: confirmDestructive })) }),
+  configBackups: (targetRigId = "default") => request<ConfigBackupMetadata[]>(withTarget("/api/config/backups", targetRigId)),
+  restoreConfig: (backupName: string, targetRigId = "default") =>
+    request<ConfigRestoreResponse>("/api/config/restore", { method: "POST", body: JSON.stringify(withTargetBody(targetRigId, { backup_name: backupName })) }),
+  configImportCandidates: (targetRigId = "default") => request<ConfigImportCandidate[]>(withTarget("/api/config/import-candidates", targetRigId)),
+  importConfigCandidates: (candidateIds: string[], targetRigId = "default") =>
+    request<ManagedModel[]>("/api/config/import-candidates", { method: "POST", body: JSON.stringify(withTargetBody(targetRigId, { candidate_ids: candidateIds })) }),
+  upload: (role: ModelRole, file: File, targetRigId = "default") => {
     const formData = new FormData();
     formData.append("file", file);
-    return request<{ manager_path: string; container_path: string }>(`/api/uploads?role=${role}`, {
+    const params = new URLSearchParams({ role });
+    if (targetRigId !== "default") params.set("target_rig_id", targetRigId);
+    return request<{ manager_path: string; container_path: string }>(`/api/uploads?${params.toString()}`, {
       method: "POST",
       body: formData,
     });
   },
 };
+
+function withTarget(path: string, targetRigId: string): string {
+  if (!targetRigId || targetRigId === "default") return path;
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}target_rig_id=${encodeURIComponent(targetRigId)}`;
+}
+
+function withTargetBody<T extends Record<string, unknown>>(targetRigId: string, body: T): T | (T & { target_rig_id: string }) {
+  return targetRigId === "default" ? body : { target_rig_id: targetRigId, ...body };
+}
 
 function stripUiOnlySettings(settings: ManagerSettings): ManagerSettings {
   const { hf_token: _hfToken, hf_token_configured: _hfTokenConfigured, hf_token_source: _hfTokenSource, ...safeSettings } = settings;

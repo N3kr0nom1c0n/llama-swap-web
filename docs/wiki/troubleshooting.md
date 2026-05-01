@@ -10,8 +10,9 @@ Check:
 
 - HF token for gated/private repos.
 - URL and revision.
-- Free disk space.
-- Destination path under `/models`.
+- Free disk space on the selected target rig.
+- Destination path under the selected target rig's model root.
+- SSH health if the manager and llama-swap are on different machines.
 - Hugging Face rate limits or network errors.
 
 ## Download Completed But Model Is Not Usable
@@ -22,8 +23,9 @@ A completed download only means files were written. Create or attach a managed m
 
 Check:
 
-- Config file exists and is writable by UID 10001.
-- Backup directory exists and is writable.
+- Selected target rig is correct and reachable.
+- Config file exists and is writable on that target rig.
+- Backup directory exists and is writable on that target rig.
 - Generated paths use `/models/...`.
 - Preview is fresh and valid.
 - Destructive changes are intentionally confirmed.
@@ -34,7 +36,7 @@ Open Config Preview, find the backup list, and restore a previous backup. Restar
 
 ## GPU Detection Fails
 
-Check whether `nvidia-smi` is available in the manager container. The manager can still use manually entered GPU data if detection is unavailable.
+For SSH rigs, check that `nvidia-smi` is available to the configured SSH user on the selected target rig. For local rigs, check whether `nvidia-smi` is available in the manager container. The manager can still use manually entered GPU data if detection is unavailable.
 
 ## HF Token Is Not Working
 

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import threading
+import queue
 
 import pytest
 
 from app.hf_service import HfFileInfo, classify_file, classify_files, download_selected_files, get_hf_file_info, parse_hf_url, resolve_hf_url
-from app.downloads import DownloadManager
+from app import downloads as downloads_module
+from app.downloads import DownloadCancelled, DownloadManager
 from app.database import Database
-from app.schemas import DownloadJob, DownloadRequest
+from app.schemas import DownloadJob, DownloadRequest, TargetRig
 from app.settings import ManagerSettings
 
 
@@ -322,6 +324,64 @@ def test_cancelled_download_does_not_become_completed_after_transfer(tmp_path, m
     assert completed.status == "cancelled"
     assert completed.written_files == []
     assert completed.container_files == []
+
+
+def test_cancelled_ssh_download_terminates_worker_process(tmp_path, monkeypatch) -> None:
+    db = Database(tmp_path / "manager.db")
+    db.init()
+    settings = ManagerSettings()
+    manager = DownloadManager(db, settings, run_in_process=False)
+    manager._cancelled.add("ssh-job")
+    terminated: list[bool] = []
+
+    class FakeQueue:
+        def get_nowait(self):
+            raise queue.Empty
+
+        def get(self, timeout: int = 0):
+            raise queue.Empty
+
+        def close(self) -> None:
+            pass
+
+    class FakeProcess:
+        def __init__(self, *args, **kwargs):
+            self.exitcode = None
+            self.alive = True
+            self.pid = None
+
+        def start(self) -> None:
+            pass
+
+        def is_alive(self) -> bool:
+            return self.alive
+
+        def terminate(self) -> None:
+            terminated.append(True)
+            self.exitcode = -15
+            self.alive = False
+
+        def join(self, timeout: int | None = None) -> None:
+            pass
+
+    class FakeContext:
+        def Queue(self):
+            return FakeQueue()
+
+        def Process(self, *args, **kwargs):
+            return FakeProcess()
+
+    monkeypatch.setattr(downloads_module.multiprocessing, "get_context", lambda _name: FakeContext())
+    rig = TargetRig(id="rig-40", mode="ssh", host="192.168.42.40", username="n3kr0")
+
+    with pytest.raises(DownloadCancelled, match="remote ssh download process terminated"):
+        manager._download_ssh_process(
+            "ssh-job",
+            {"repo_id": "org/repo", "revision": "main", "files": ["model.gguf"], "destination_dir": "/models/chat", "token": False},
+            rig,
+        )
+
+    assert terminated == [True]
 
 
 def test_queued_jobs_resume_after_manager_startup(tmp_path, monkeypatch) -> None:

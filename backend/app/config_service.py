@@ -421,7 +421,7 @@ def _destructive_warning(change: DestructiveChange) -> str:
     return f"destructive change: {change.kind} at {change.path} removes {change.before}"
 
 
-def validate_config_document(document: dict, models: list[ManagedModel], settings: ManagerSettings) -> list[str]:
+def validate_config_document(document: dict, models: list[ManagedModel], settings: ManagerSettings, validate_local_paths: bool = True) -> list[str]:
     errors: list[str] = []
     if "groups" in document:
         errors.append("legacy groups cannot be used when matrix is enabled")
@@ -465,6 +465,13 @@ def validate_config_document(document: dict, models: list[ManagedModel], setting
     for model_id in ((document.get("hooks") or {}).get("on_startup") or {}).get("preload", []):
         if model_id not in model_ids:
             errors.append(f"startup preload references unknown model: {model_id}")
+    if validate_local_paths:
+        errors.extend(validate_local_runtime_paths(settings))
+    return errors
+
+
+def validate_local_runtime_paths(settings: ManagerSettings) -> list[str]:
+    errors: list[str] = []
     for label, path in [
         ("manager model root", settings.manager_model_root),
         ("backup directory", settings.backups_dir),
@@ -528,7 +535,7 @@ def render_config(current_yaml: str, models: list[ManagedModel], settings: Manag
     return output.getvalue()
 
 
-def preview_config(current_yaml: str, models: list[ManagedModel], settings: ManagerSettings) -> ConfigPreviewResponse:
+def preview_config(current_yaml: str, models: list[ManagedModel], settings: ManagerSettings, validate_local_paths: bool = True) -> ConfigPreviewResponse:
     warnings: list[str] = []
     errors: list[str] = []
     destructive_changes: list[DestructiveChange] = []
@@ -536,7 +543,7 @@ def preview_config(current_yaml: str, models: list[ManagedModel], settings: Mana
         rendered = render_config(current_yaml, models, settings)
         yaml = YAML()
         document = yaml.load(rendered) or {}
-        errors.extend(validate_config_document(document, models, settings))
+        errors.extend(validate_config_document(document, models, settings, validate_local_paths=validate_local_paths))
         destructive_changes = detect_destructive_changes(current_yaml, rendered)
         warnings.extend(_destructive_warning(change) for change in destructive_changes)
     except Exception as exc:

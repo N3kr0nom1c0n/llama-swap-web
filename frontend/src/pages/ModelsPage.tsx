@@ -6,16 +6,18 @@ import { CodeBlock } from "../components/CodeBlock";
 import { Field } from "../components/Field";
 import { PageHeader } from "../components/PageHeader";
 import { queryKeys } from "../queryKeys";
+import { useTargetRig } from "../targetRigContext";
 import type { ManagedModel, MatrixBehavior, ModelRole } from "../types";
 import { emptyModel, matrixBehaviors, modelRoles } from "../types";
 import { defaultTtlForRole, modelCommand, safeMatrixKey } from "../utils";
 
 export function ModelsPage() {
   const queryClient = useQueryClient();
-  const models = useQuery({ queryKey: queryKeys.models, queryFn: api.models });
+  const { targetRigId, selectedRig } = useTargetRig();
+  const models = useQuery({ queryKey: queryKeys.modelsFor(targetRigId), queryFn: () => api.models(targetRigId) });
   const settings = useQuery({ queryKey: queryKeys.settings, queryFn: api.settings });
-  const gpus = useQuery({ queryKey: queryKeys.gpus, queryFn: api.gpus });
-  const importCandidates = useQuery({ queryKey: queryKeys.configImport, queryFn: api.configImportCandidates, enabled: false });
+  const gpus = useQuery({ queryKey: queryKeys.gpusFor(targetRigId), queryFn: () => api.gpus(targetRigId) });
+  const importCandidates = useQuery({ queryKey: queryKeys.configImportFor(targetRigId), queryFn: () => api.configImportCandidates(targetRigId), enabled: false });
   const [selectedId, setSelectedId] = useState<string>("");
   const [draft, setDraft] = useState<ManagedModel>(emptyModel());
   const [listDrafts, setListDrafts] = useState(() => listDraftsFromModel(emptyModel()));
@@ -35,16 +37,16 @@ export function ModelsPage() {
   const save = useMutation({
     mutationFn: api.saveModel,
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.models });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.state });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.modelsFor(targetRigId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.stateFor(targetRigId) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.preview });
     },
   });
   const importSelected = useMutation({
-    mutationFn: api.importConfigCandidates,
+    mutationFn: (candidateIds: string[]) => api.importConfigCandidates(candidateIds, targetRigId),
     onSuccess: (imported) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.models });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.state });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.modelsFor(targetRigId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.stateFor(targetRigId) });
       if (imported[0]) {
         setSelectedId(imported[0].id);
         setDraft(imported[0]);
@@ -55,7 +57,7 @@ export function ModelsPage() {
   const command = useMemo(() => modelCommand(draft, settings.data), [draft, settings.data]);
 
   function update(patch: Partial<ManagedModel>) {
-    setDraft((current) => ({ ...current, ...patch }));
+    setDraft((current) => ({ ...current, target_rig_id: targetRigId, ...patch }));
   }
 
   function updateList(field: keyof ModelListDrafts, value: string) {
@@ -65,6 +67,7 @@ export function ModelsPage() {
 
   function startNew() {
     const next = emptyModel();
+    next.target_rig_id = targetRigId;
     next.hf_revision = settings.data?.default_revision ?? "main";
     next.ttl = defaultTtlForRole(settings.data, next.role);
     setSelectedId("");
@@ -76,7 +79,7 @@ export function ModelsPage() {
     <div className="page">
       <PageHeader
         title="Models"
-        description="Edit persisted model entries, llama-server flags, matrix behavior, and generated commands."
+        description={`Edit model entries, llama-server flags, matrix behavior, and generated commands for ${selectedRig?.name ?? "the selected rig"}.`}
         actions={
           <>
             <button className="button secondary" type="button" onClick={startNew}>
@@ -87,7 +90,7 @@ export function ModelsPage() {
               <FileSearch size={16} aria-hidden="true" />
               Import Config
             </button>
-            <button className="button" type="button" onClick={() => save.mutate(draft)} disabled={!draft.id || save.isPending}>
+            <button className="button" type="button" onClick={() => save.mutate({ ...draft, target_rig_id: targetRigId })} disabled={!draft.id || save.isPending}>
               <Save size={16} aria-hidden="true" />
               Save Model
             </button>

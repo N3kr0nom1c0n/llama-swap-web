@@ -1,10 +1,10 @@
 # Config Preview, Apply, And Restore
 
-Config Preview is the safety boundary before the manager writes `config.yaml`.
+Config Preview is the safety boundary before the manager writes the selected target rig's `config.yaml`.
 
 ## Preview
 
-Preview reads the current config, renders manager-owned models, validates generated YAML, and shows a unified diff. A valid preview receives a `stage_id`. Apply uses that staged preview, not a hidden regeneration.
+Preview reads the selected target rig's current config, renders manager-owned models for that rig, validates generated YAML, and shows a unified diff. A valid preview receives a `stage_id`. Apply uses that staged preview, not a hidden regeneration.
 
 ## Destructive Diffs
 
@@ -18,15 +18,15 @@ Apply does this:
 
 1. Re-reads current config.
 2. Verifies the staged preview is fresh.
-3. Creates a timestamped backup in `/backups`.
+3. Creates a timestamped backup in the selected rig's backups directory.
 4. Writes the new config atomically when possible.
 5. Returns a restart-required note.
 
-The manager does not restart llama-swap automatically as part of apply. If optional restart controls are enabled, the `llama-swap Runtime` panel can inspect the configured container and expose a manual restart button.
+The manager does not restart llama-swap automatically as part of apply. SSH target rigs use the configured remote restart command. Local single-host installs can use Docker socket controls if explicitly enabled.
 
 ## Backup List
 
-The Config Preview page lists config backups from `/backups`. Only safe `config*.yaml` backups are shown.
+The Config Preview page lists config backups from the selected target rig. Only safe `config*.yaml` backups are shown.
 
 ## Restore
 

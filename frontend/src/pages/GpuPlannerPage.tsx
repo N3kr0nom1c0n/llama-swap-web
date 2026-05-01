@@ -6,12 +6,14 @@ import { Field } from "../components/Field";
 import { PageHeader } from "../components/PageHeader";
 import { StatusPill } from "../components/StatusPill";
 import { queryKeys } from "../queryKeys";
+import { useTargetRig } from "../targetRigContext";
 import type { GpuDevice } from "../types";
 
 export function GpuPlannerPage() {
   const queryClient = useQueryClient();
-  const gpus = useQuery({ queryKey: queryKeys.gpus, queryFn: api.gpus });
-  const detection = useQuery({ queryKey: queryKeys.gpuDetection, queryFn: api.detectGpus, enabled: false });
+  const { targetRigId, selectedRig } = useTargetRig();
+  const gpus = useQuery({ queryKey: queryKeys.gpusFor(targetRigId), queryFn: () => api.gpus(targetRigId) });
+  const detection = useQuery({ queryKey: queryKeys.gpuDetectionFor(targetRigId), queryFn: () => api.detectGpus(targetRigId), enabled: false });
   const [draft, setDraft] = useState<GpuDevice[]>([]);
 
   useEffect(() => {
@@ -19,13 +21,13 @@ export function GpuPlannerPage() {
   }, [gpus.data]);
 
   const save = useMutation({
-    mutationFn: api.saveGpus,
+    mutationFn: (items: GpuDevice[]) => api.saveGpus(items, targetRigId),
     onSuccess: (data) => {
-      queryClient.setQueryData(queryKeys.gpus, data);
-      void queryClient.invalidateQueries({ queryKey: queryKeys.state });
+      queryClient.setQueryData(queryKeys.gpusFor(targetRigId), data);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.stateFor(targetRigId) });
     },
   });
-  const recommendation = useMutation({ mutationFn: () => api.recommendGpus(draft.map((gpu) => gpu.index)) });
+  const recommendation = useMutation({ mutationFn: () => api.recommendGpus(draft.map((gpu) => gpu.index), targetRigId) });
   const draftSignature = draft.map((gpu) => gpu.index).join(",");
 
   useEffect(() => {
@@ -45,6 +47,7 @@ export function GpuPlannerPage() {
         vram_gb: gpu.vram_gb,
         role: gpu.role,
         notes: gpu.notes,
+        target_rig_id: targetRigId,
       })),
     );
   }
@@ -53,7 +56,7 @@ export function GpuPlannerPage() {
     <div className="page">
       <PageHeader
         title="GPU Planner"
-        description="Map CUDA devices to model roles and keep tensor split choices visible before config generation."
+        description={`Map CUDA devices on ${selectedRig?.name ?? "the selected target rig"} to model roles and tensor split choices.`}
         actions={
           <button className="button" onClick={() => save.mutate(draft)} disabled={save.isPending} type="button">
             <Save size={16} aria-hidden="true" />
@@ -72,7 +75,7 @@ export function GpuPlannerPage() {
             <button
               className="button secondary"
               type="button"
-              onClick={() => setDraft((current) => [...current, { index: nextCudaIndex(current), name: "GPU", vram_gb: 24, role: "", notes: "" }])}
+              onClick={() => setDraft((current) => [...current, { index: nextCudaIndex(current), name: "GPU", vram_gb: 24, role: "", notes: "", target_rig_id: targetRigId }])}
             >
               <Plus size={16} aria-hidden="true" />
               Add GPU

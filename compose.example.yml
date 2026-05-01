@@ -16,11 +16,16 @@ services:
     #   - "${DOCKER_SOCKET_GID:?Set DOCKER_SOCKET_GID to the Docker socket group id}"
     volumes:
       - ./.env:/app/.env
-      - /path/to/llama.cpp/models:/models
-      - /path/to/llama-swap/config.yaml:/app/config.yaml
-      - /path/to/llama-swap/backups:/backups
+      # SSH-first remote target rigs: mount the manager key read-only, then
+      # configure Settings -> Target Rigs with /data/ssh/id_ed25519.
+      - ./ssh:/data/ssh:ro
       - llama-swap-manager-data:/data
-      # Optional: only mount this when LLAMA_SWAP_RESTART_ENABLED=true.
+      # Local single-host mode only: mount these if the manager runs on the
+      # same host/storage as llama-swap and uses the default local target rig.
+      # - /path/to/llama.cpp/models:/models
+      # - /path/to/llama-swap/config.yaml:/app/config.yaml
+      # - /path/to/llama-swap/backups:/backups
+      # Optional local restart: only mount this when LLAMA_SWAP_RESTART_ENABLED=true.
       # It lets the manager restart the configured llama-swap container.
       # - /var/run/docker.sock:/var/run/docker.sock
 

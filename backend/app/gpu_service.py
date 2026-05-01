@@ -63,7 +63,7 @@ def detect_gpus(runner: GpuRunner = nvidia_smi_runner) -> dict:
                 "--format=csv,noheader,nounits",
             ]
         )
-    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, RuntimeError) as exc:
         return {"available": False, "reason": _unavailable_reason(exc), "gpus": []}
 
     try:
@@ -84,7 +84,7 @@ def gpu_status(runner: GpuRunner = nvidia_smi_runner) -> dict:
                 "--format=csv,noheader,nounits",
             ]
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, RuntimeError):
         return {**detection, "processes": []}
     processes = []
     for line in output.splitlines():

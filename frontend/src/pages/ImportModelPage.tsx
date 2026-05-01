@@ -17,17 +17,19 @@ import {
   managedModelFromInventoryItem,
 } from "../downloadWorkflow";
 import { queryKeys } from "../queryKeys";
+import { useTargetRig } from "../targetRigContext";
 import type { DownloadJob, FileInventoryItem, HfFile, ManagedModel, ModelRole } from "../types";
 import { emptyModel, modelRoles } from "../types";
 import { defaultTtlForRole, modelCommand, safeMatrixKey } from "../utils";
 
 export function ImportModelPage() {
   const queryClient = useQueryClient();
+  const { targetRigId, selectedRig } = useTargetRig();
   const [searchParams] = useSearchParams();
   const focusedJobId = searchParams.get("job") ?? "";
   const settings = useQuery({ queryKey: queryKeys.settings, queryFn: api.settings });
-  const gpus = useQuery({ queryKey: queryKeys.gpus, queryFn: api.gpus });
-  const models = useQuery({ queryKey: queryKeys.models, queryFn: api.models });
+  const gpus = useQuery({ queryKey: queryKeys.gpusFor(targetRigId), queryFn: () => api.gpus(targetRigId) });
+  const models = useQuery({ queryKey: queryKeys.modelsFor(targetRigId), queryFn: () => api.models(targetRigId) });
   const [role, setRole] = useState<ModelRole>("chat");
   const [hfUrl, setHfUrl] = useState("");
   const [revision, setRevision] = useState("main");
@@ -39,17 +41,18 @@ export function ImportModelPage() {
   const [installMessage, setInstallMessage] = useState("");
   const [scanMessage, setScanMessage] = useState("");
   const jobs = useQuery({
-    queryKey: queryKeys.downloads,
-    queryFn: api.downloads,
+    queryKey: queryKeys.downloadsFor(targetRigId),
+    queryFn: () => api.downloads(targetRigId),
     refetchInterval: (query) => (query.state.data?.some(isJobActive) ? 1500 : false),
   });
 
   const resolve = useMutation({
     mutationFn: () => api.resolveHf(hfUrl, revision || settings.data?.default_revision || "main"),
     onSuccess: (data) => {
-      setSelectedFiles(data.files.filter((file) => file.selected).map((file) => file.path));
+      setSelectedFiles([]);
       setDraft((current) => ({
         ...current,
+        target_rig_id: targetRigId,
         id: desiredName || data.repo_id.split("/").pop()?.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "",
         display_name: desiredName || data.repo_id.split("/").pop() || "",
         role,
@@ -66,6 +69,7 @@ export function ImportModelPage() {
   const download = useMutation({
     mutationFn: async () => {
       const importDraft = await api.createImport({
+        target_rig_id: targetRigId,
         role,
         source_type: "hf",
         hf_url: hfUrl,
@@ -75,6 +79,7 @@ export function ImportModelPage() {
         gpu_devices: gpuDevices,
       });
       return api.startDownload({
+        target_rig_id: targetRigId,
         repo_id: resolve.data?.repo_id ?? hfUrl,
         revision: resolve.data?.revision ?? revision,
         files: selectedFiles,
@@ -84,7 +89,7 @@ export function ImportModelPage() {
     },
     onSuccess: (job) => {
       setLastJobId(job.id);
-      void queryClient.invalidateQueries({ queryKey: queryKeys.downloads });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.downloadsFor(targetRigId) });
     },
   });
   const job = useQuery({
@@ -99,8 +104,8 @@ export function ImportModelPage() {
   const saveModel = useMutation({
     mutationFn: api.saveModel,
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.models });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.state });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.modelsFor(targetRigId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.stateFor(targetRigId) });
     },
   });
   const saveScannedModel = useMutation({
@@ -108,8 +113,8 @@ export function ImportModelPage() {
     onSuccess: (model) => {
       setDraft(model);
       setScanMessage(`Managed model ${model.id} created from existing file. Preview config when ready.`);
-      void queryClient.invalidateQueries({ queryKey: queryKeys.models });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.state });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.modelsFor(targetRigId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.stateFor(targetRigId) });
     },
   });
   const installModel = useMutation({
@@ -122,15 +127,15 @@ export function ImportModelPage() {
       setHfUrl(model.hf_url);
       setRevision(model.hf_revision);
       setInstallMessage(`Managed model ${model.id} created. Next: tune it or preview config.`);
-      void queryClient.invalidateQueries({ queryKey: queryKeys.models });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.state });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.downloads });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.modelsFor(targetRigId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.stateFor(targetRigId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.downloadsFor(targetRigId) });
     },
   });
   const cancelJob = useMutation({
     mutationFn: api.cancelDownload,
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.downloads });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.downloadsFor(targetRigId) });
       if (lastJobId) void queryClient.invalidateQueries({ queryKey: ["download", lastJobId] });
     },
   });
@@ -138,23 +143,24 @@ export function ImportModelPage() {
     mutationFn: api.retryDownload,
     onSuccess: (newJob) => {
       setLastJobId(newJob.id);
-      void queryClient.invalidateQueries({ queryKey: queryKeys.downloads });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.downloadsFor(targetRigId) });
     },
   });
   const cleanupJobs = useMutation({
-    mutationFn: api.cleanupTerminalDownloads,
+    mutationFn: () => api.cleanupTerminalDownloads(targetRigId),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.downloads });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.state });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.downloadsFor(targetRigId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.stateFor(targetRigId) });
     },
   });
-  const scanExisting = useMutation({ mutationFn: api.scanModels });
+  const scanExisting = useMutation({ mutationFn: () => api.scanModels(targetRigId) });
   const upload = useMutation({
-    mutationFn: async (file: File) => api.upload(role, file),
+    mutationFn: async (file: File) => api.upload(role, file, targetRigId),
     onSuccess: (data) => {
       const fileName = data.container_path.split("/").pop() || "uploaded-model";
       setDraft((current) => ({
         ...current,
+        target_rig_id: targetRigId,
         id: current.id || fileName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/-gguf$/, ""),
         display_name: current.display_name || fileName,
         role,
@@ -168,7 +174,7 @@ export function ImportModelPage() {
   });
 
   const selectedHfFiles = useMemo(() => resolve.data?.files.filter((file) => selectedFiles.includes(file.path)) ?? [], [resolve.data, selectedFiles]);
-  const command = modelCommand({ ...draft, gpu_devices: gpuDevices }, settings.data);
+  const command = modelCommand({ ...draft, target_rig_id: targetRigId, gpu_devices: gpuDevices }, settings.data);
   const sortedJobs = useMemo(() => {
     const list = jobs.data ?? [];
     if (!focusedJobId) return list;
@@ -193,6 +199,7 @@ export function ImportModelPage() {
     const containerFiles = completedJob?.container_files?.length ? completedJob.container_files : draft.container_files;
     saveModel.mutate({
       ...draft,
+      target_rig_id: targetRigId,
       role,
       source_type: draft.source_type === "manual" ? "hf" : draft.source_type,
       hf_url: hfUrl,
@@ -221,6 +228,7 @@ export function ImportModelPage() {
       matrix_expression: draft.matrix_expression,
       evict_cost: draft.evict_cost,
       startup_preload: draft.startup_preload,
+      target_rig_id: targetRigId,
     };
     return { ...payload, role };
   }
@@ -231,14 +239,14 @@ export function ImportModelPage() {
   }
 
   function createModelFromScan(item: FileInventoryItem) {
-    const model = managedModelFromInventoryItem(item, settings.data);
+    const model = { ...managedModelFromInventoryItem(item, settings.data), target_rig_id: targetRigId };
     setScanMessage("");
     saveScannedModel.mutate(model);
   }
 
   return (
     <div className="page">
-      <PageHeader title="Import Model" description="Resolve Hugging Face files, stage rig-side downloads, upload local GGUFs, and create a draft model entry." />
+      <PageHeader title="Import Model" description={`Resolve Hugging Face files and place them directly on ${selectedRig?.name ?? "the selected target rig"}.`} />
 
       <section className="panel">
         <div className="panel-header">
@@ -406,7 +414,7 @@ export function ImportModelPage() {
             </table>
           </div>
           <div className="inline-actions">
-            <button className="button" type="button" onClick={() => createImport.mutate({ role, source_type: "hf", hf_url: hfUrl, hf_revision: revision, selected_files: selectedFiles, desired_name: currentDesiredName(), gpu_devices: gpuDevices })}>
+            <button className="button" type="button" onClick={() => createImport.mutate({ target_rig_id: targetRigId, role, source_type: "hf", hf_url: hfUrl, hf_revision: revision, selected_files: selectedFiles, desired_name: currentDesiredName(), gpu_devices: gpuDevices })}>
               <FilePlus2 size={16} aria-hidden="true" />
               Preview Destination
             </button>
@@ -415,7 +423,7 @@ export function ImportModelPage() {
               Start Download
             </button>
           </div>
-          {createImport.data ? <p className="form-success">Destination: {createImport.data.destination_dir}</p> : null}
+          {createImport.data ? <p className="form-success">Target rig destination: {createImport.data.destination_dir}</p> : null}
           {download.error ? <p className="form-error">{download.error.message}</p> : null}
         </section>
       ) : null}

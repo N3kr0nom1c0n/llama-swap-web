@@ -5,7 +5,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 
 BASE_SCHEMA_SQL = """
@@ -20,6 +20,18 @@ create table if not exists settings (
 create table if not exists gpus (
   idx integer primary key,
   payload text not null
+);
+create table if not exists rig_gpus (
+  target_rig_id text not null,
+  idx integer not null,
+  payload text not null,
+  primary key (target_rig_id, idx)
+);
+create table if not exists target_rigs (
+  id text primary key,
+  payload text not null,
+  created_at text not null,
+  updated_at text not null
 );
 create table if not exists models (
   id text primary key,
@@ -48,6 +60,7 @@ create table if not exists staged_configs (
   expires_at text,
   fingerprint text not null default '',
   model_ids text not null default '[]',
+  target_rig_id text not null default 'default',
   applied_at text
 );
 """
@@ -86,6 +99,7 @@ def migrate_staged_config_metadata(conn: sqlite3.Connection) -> None:
         "expires_at": "alter table staged_configs add column expires_at text",
         "fingerprint": "alter table staged_configs add column fingerprint text not null default ''",
         "model_ids": "alter table staged_configs add column model_ids text not null default '[]'",
+        "target_rig_id": "alter table staged_configs add column target_rig_id text not null default 'default'",
         "applied_at": "alter table staged_configs add column applied_at text",
     }
     for column, statement in migrations.items():
@@ -100,6 +114,28 @@ def _column_names(conn: sqlite3.Connection, table_name: str) -> set[str]:
     return columns
 
 
+def migrate_target_rigs(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        create table if not exists rig_gpus (
+          target_rig_id text not null,
+          idx integer not null,
+          payload text not null,
+          primary key (target_rig_id, idx)
+        );
+        create table if not exists target_rigs (
+          id text primary key,
+          payload text not null,
+          created_at text not null,
+          updated_at text not null
+        );
+        """
+    )
+    if "target_rig_id" not in _column_names(conn, "staged_configs"):
+        conn.execute("alter table staged_configs add column target_rig_id text not null default 'default'")
+
+
 MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     1: migrate_staged_config_metadata,
+    2: migrate_target_rigs,
 }

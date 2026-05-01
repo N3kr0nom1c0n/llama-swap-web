@@ -1,6 +1,6 @@
 # Llama-Swap Web Wiki
 
-This wiki is the operator guide for running Llama-Swap Web as a LAN manager for llama-swap and llama.cpp models.
+This wiki is the operator guide for running Llama-Swap Web as a LAN manager for llama-swap and llama.cpp models. Production use is SSH-first: the web manager may run on one host while one or more target rigs own model downloads, scans, GPU detection, config writes, backups, and restarts.
 
 Start here:
 
@@ -14,4 +14,4 @@ Start here:
 - [Troubleshooting](troubleshooting.md): common failure modes and what to check first.
 - [Release QA](release-qa.md): commands and proof required before calling a build production-ready.
 
-Version 1 is intentionally LAN-focused: no built-in login and no automatic llama-swap restart during config apply. Optional manual restart controls require an explicit Docker socket mount and should only be enabled on a trusted LAN or behind your own auth layer.
+Version 1 is intentionally LAN-focused: no built-in login and no automatic llama-swap restart during config apply. SSH target rigs use a configured remote restart command. Optional Docker socket controls are local single-host only and should be enabled only on a trusted LAN or behind your own auth layer.

@@ -13,6 +13,31 @@ SourceType = Literal["hf", "upload", "manual"]
 JobStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
 ModelFileKind = Literal["gguf", "gguf_part", "mmproj", "chat_template", "tokenizer", "other"]
 DestructiveChangeKind = Literal["model_removed", "matrix_removed", "hook_removed", "global_removed", "alias_removed"]
+TargetRigMode = Literal["local", "ssh"]
+
+
+DEFAULT_TARGET_RIG_ID = "default"
+
+
+class TargetRig(BaseModel):
+    id: str = DEFAULT_TARGET_RIG_ID
+    name: str = "Local Manager Host"
+    mode: TargetRigMode = "local"
+    host: str = ""
+    port: int = Field(default=22, ge=1, le=65535)
+    username: str = ""
+    ssh_key_path: str = ""
+    model_root: str = "/models"
+    llama_swap_model_root: str = "/models"
+    config_path: str = "/app/config.yaml"
+    backups_dir: str = "/backups"
+    download_temp_dir: str = "/data/tmp"
+    restart_command: str = "docker restart llama-swap"
+    health_check_command: str = "true"
+    enabled: bool = True
+    is_default: bool = False
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class GpuDevice(BaseModel):
@@ -21,15 +46,18 @@ class GpuDevice(BaseModel):
     vram_gb: int
     role: str = ""
     notes: str = ""
+    target_rig_id: str = DEFAULT_TARGET_RIG_ID
 
 
 class GpuRecommendationRequest(BaseModel):
+    target_rig_id: str = DEFAULT_TARGET_RIG_ID
     cuda_devices: list[int] = Field(default_factory=list)
 
 
 class ManagedModel(BaseModel):
     id: str
     display_name: str
+    target_rig_id: str = DEFAULT_TARGET_RIG_ID
     role: ModelRole = "chat"
     source_type: SourceType = "manual"
     hf_url: str = ""
@@ -80,6 +108,7 @@ class HfResolveResponse(BaseModel):
 
 
 class ImportDraftRequest(BaseModel):
+    target_rig_id: str = DEFAULT_TARGET_RIG_ID
     role: ModelRole
     source_type: SourceType
     hf_url: str = ""
@@ -90,6 +119,7 @@ class ImportDraftRequest(BaseModel):
 
 
 class DownloadRequest(BaseModel):
+    target_rig_id: str = DEFAULT_TARGET_RIG_ID
     repo_id: str
     revision: str = "main"
     files: list[str]
@@ -99,6 +129,7 @@ class DownloadRequest(BaseModel):
 
 class DownloadJob(BaseModel):
     id: str
+    target_rig_id: str = DEFAULT_TARGET_RIG_ID
     status: JobStatus = "queued"
     repo_id: str = ""
     revision: str = "main"
@@ -118,6 +149,7 @@ class DownloadJob(BaseModel):
 
 
 class CreateModelFromDownloadRequest(BaseModel):
+    target_rig_id: str = DEFAULT_TARGET_RIG_ID
     id: str = ""
     display_name: str = ""
     role: ModelRole | None = None
@@ -142,6 +174,7 @@ class FileInventoryItem(BaseModel):
 
 
 class ConfigPreviewRequest(BaseModel):
+    target_rig_id: str = DEFAULT_TARGET_RIG_ID
     model_ids: list[str] = Field(default_factory=list)
 
 
@@ -162,6 +195,7 @@ class ConfigPreviewResponse(BaseModel):
 
 
 class ConfigApplyRequest(BaseModel):
+    target_rig_id: str = DEFAULT_TARGET_RIG_ID
     stage_id: str
     confirm_destructive: bool = False
 
@@ -174,6 +208,7 @@ class ConfigBackupMetadata(BaseModel):
 
 
 class ConfigRestoreRequest(BaseModel):
+    target_rig_id: str = DEFAULT_TARGET_RIG_ID
     backup_name: str
 
 
@@ -184,11 +219,13 @@ class ConfigImportCandidate(BaseModel):
 
 
 class ConfigImportRequest(BaseModel):
+    target_rig_id: str = DEFAULT_TARGET_RIG_ID
     candidate_ids: list[str] = Field(default_factory=list)
 
 
 class StateResponse(BaseModel):
     settings: dict
+    target_rigs: list[TargetRig] = Field(default_factory=list)
     gpus: list[GpuDevice]
     model_count: int
     job_count: int

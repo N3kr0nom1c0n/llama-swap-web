@@ -6,13 +6,15 @@ import { PageHeader } from "../components/PageHeader";
 import { StatusPill } from "../components/StatusPill";
 import { jobFilePaths, isJobActive, isJobFailed, isJobReadyForModel } from "../downloadWorkflow";
 import { queryKeys } from "../queryKeys";
+import { useTargetRig } from "../targetRigContext";
 
 export function DashboardPage() {
-  const state = useQuery({ queryKey: queryKeys.state, queryFn: api.state, refetchInterval: 10000 });
-  const models = useQuery({ queryKey: queryKeys.models, queryFn: api.models });
+  const { targetRigId, selectedRig } = useTargetRig();
+  const state = useQuery({ queryKey: queryKeys.stateFor(targetRigId), queryFn: () => api.state(targetRigId), refetchInterval: 10000 });
+  const models = useQuery({ queryKey: queryKeys.modelsFor(targetRigId), queryFn: () => api.models(targetRigId) });
   const downloads = useQuery({
-    queryKey: queryKeys.downloads,
-    queryFn: api.downloads,
+    queryKey: queryKeys.downloadsFor(targetRigId),
+    queryFn: () => api.downloads(targetRigId),
     refetchInterval: (query) => (query.state.data?.some(isJobActive) ? 1500 : 10000),
   });
 
@@ -26,7 +28,7 @@ export function DashboardPage() {
     <div className="page">
       <PageHeader
         title="Dashboard"
-        description="Operational status for staged model imports and llama-swap config generation."
+        description={`Operational status for ${selectedRig?.name ?? "the selected target rig"}.`}
         actions={
           <button className="button secondary" onClick={() => void state.refetch()} type="button">
             <RefreshCw size={16} aria-hidden="true" />

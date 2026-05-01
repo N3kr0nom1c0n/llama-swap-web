@@ -1,10 +1,10 @@
 # GPU Planning
 
-GPU Planner helps map models to CUDA devices and llama.cpp placement flags.
+GPU Planner helps map models to CUDA devices and llama.cpp placement flags on the selected target rig.
 
 ## CUDA Devices
 
-CUDA indexes should match `nvidia-smi` ordering inside the llama-swap runtime. If Docker remaps devices, verify from inside the container.
+CUDA indexes should match `nvidia-smi` ordering on the selected target rig and inside the llama-swap runtime. SSH rigs run detection remotely. If Docker remaps devices, verify from inside the llama-swap container.
 
 ## Main GPU
 

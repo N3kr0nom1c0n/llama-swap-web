@@ -2,6 +2,28 @@ export type ModelRole = "reasoning" | "chat" | "vision" | "coding" | "aux";
 export type SourceType = "hf" | "upload" | "manual";
 export type MatrixBehavior = "runs_alone" | "with_support" | "support" | "custom";
 export type JobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type TargetRigMode = "local" | "ssh";
+
+export interface TargetRig {
+  id: string;
+  name: string;
+  mode: TargetRigMode;
+  host: string;
+  port: number;
+  username: string;
+  ssh_key_path: string;
+  model_root: string;
+  llama_swap_model_root: string;
+  config_path: string;
+  backups_dir: string;
+  download_temp_dir: string;
+  restart_command: string;
+  health_check_command: string;
+  enabled: boolean;
+  is_default: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
 
 export interface RoleDirectories {
   reasoning: string;
@@ -74,6 +96,7 @@ export interface GpuDevice {
   vram_gb: number;
   role: string;
   notes: string;
+  target_rig_id?: string;
 }
 
 export interface DetectedGpu extends GpuDevice {
@@ -104,6 +127,7 @@ export interface GpuRecommendationResponse {
 export interface ManagedModel {
   id: string;
   display_name: string;
+  target_rig_id: string;
   role: ModelRole;
   source_type: SourceType;
   hf_url: string;
@@ -160,6 +184,7 @@ export interface HfResolveResponse {
 
 export interface DownloadJob {
   id: string;
+  target_rig_id: string;
   status: JobStatus;
   repo_id: string;
   revision: string;
@@ -179,6 +204,7 @@ export interface DownloadJob {
 }
 
 export interface CreateModelFromDownloadPayload {
+  target_rig_id?: string;
   id?: string;
   display_name?: string;
   role?: ModelRole;
@@ -196,6 +222,7 @@ export interface CreateModelFromDownloadPayload {
 
 export interface StateResponse {
   settings: ManagerSettings;
+  target_rigs: TargetRig[];
   gpus: GpuDevice[];
   model_count: number;
   job_count: number;
@@ -249,6 +276,7 @@ export function emptyModel(): ManagedModel {
   return {
     id: "",
     display_name: "",
+    target_rig_id: "default",
     role: "chat",
     source_type: "manual",
     hf_url: "",

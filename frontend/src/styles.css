@@ -166,6 +166,23 @@ a {
   border-left: 1px solid var(--line);
 }
 
+.target-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 260px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.target-selector select {
+  min-height: 32px;
+  padding: 5px 9px;
+  text-transform: none;
+}
+
 main {
   padding: 28px;
 }
@@ -723,6 +740,14 @@ pre {
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.health-output {
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #101419;
+  color: #d7f7e9;
 }
 
 .row-list {

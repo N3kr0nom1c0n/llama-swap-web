@@ -10,7 +10,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from app import settings as settings_module
 from app.main import create_app
-from app.schemas import DownloadJob
+from app.schemas import DownloadJob, TargetRig
 
 
 def test_state_initializes_db_and_redacts_hf_token(tmp_path: Path, monkeypatch) -> None:
@@ -142,6 +142,36 @@ def test_llama_swap_restart_uses_configured_docker_socket(tmp_path: Path, monkey
     assert calls == [(str(tmp_path / "docker.sock"), "llama-swap", 30)]
 
 
+def test_ssh_llama_swap_restart_failure_returns_controlled_error(tmp_path: Path, monkeypatch) -> None:
+    from app.target_rig_service import TargetRigError
+
+    app = create_app(tmp_path / "manager.db")
+    client = TestClient(app)
+    ssh_rig = TargetRig(
+        id="rig-40",
+        name="Rig 40",
+        mode="ssh",
+        host="192.168.42.40",
+        username="n3kr0",
+        model_root="/remote/models",
+        config_path="/remote/config.yaml",
+        backups_dir="/remote/backups",
+        download_temp_dir="/remote/tmp",
+    )
+    assert client.post("/api/target-rigs", json=ssh_rig.model_dump(mode="json")).status_code == 200
+
+    class BrokenClient:
+        def restart(self) -> dict:
+            raise TargetRigError("ssh restart failed")
+
+    monkeypatch.setattr("app.main.create_target_client", lambda *_args, **_kwargs: BrokenClient())
+
+    response = client.post("/api/llama-swap/restart?target_rig_id=rig-40")
+
+    assert response.status_code == 409
+    assert "ssh restart failed" in response.json()["detail"]
+
+
 def test_hf_token_write_preserves_env_file_when_replace_fails(tmp_path: Path, monkeypatch) -> None:
     env_file = tmp_path / ".env"
     original = "OTHER=value\nHF_TOKEN=hf_existing_secret\nTRAILING=kept\n"
@@ -205,6 +235,43 @@ def test_create_model_rejects_manager_file_outside_root(tmp_path: Path, monkeypa
 
     assert response.status_code == 400
     assert "outside manager root" in response.json()["detail"]
+
+
+def test_models_with_same_id_are_scoped_by_target_rig(tmp_path: Path) -> None:
+    app = create_app(tmp_path / "manager.db")
+    client = TestClient(app)
+    assert client.post("/api/target-rigs", json=TargetRig(id="rig-a", name="Rig A").model_dump(mode="json")).status_code == 200
+    assert client.post("/api/target-rigs", json=TargetRig(id="rig-b", name="Rig B").model_dump(mode="json")).status_code == 200
+
+    first = {
+        "id": "qwen",
+        "display_name": "Qwen On A",
+        "target_rig_id": "rig-a",
+        "role": "chat",
+        "container_files": ["/models/chat/a.gguf"],
+        "primary_model_file": "/models/chat/a.gguf",
+        "matrix_key": "qa",
+        "matrix_behavior": "runs_alone",
+    }
+    second = {
+        "id": "qwen",
+        "display_name": "Qwen On B",
+        "target_rig_id": "rig-b",
+        "role": "chat",
+        "container_files": ["/models/chat/b.gguf"],
+        "primary_model_file": "/models/chat/b.gguf",
+        "matrix_key": "qb",
+        "matrix_behavior": "runs_alone",
+    }
+
+    assert client.post("/api/models", json=first).status_code == 200
+    assert client.post("/api/models", json=second).status_code == 200
+
+    rig_a_models = client.get("/api/models?target_rig_id=rig-a").json()
+    rig_b_models = client.get("/api/models?target_rig_id=rig-b").json()
+    assert [(model["id"], model["display_name"]) for model in rig_a_models] == [("qwen", "Qwen On A")]
+    assert [(model["id"], model["display_name"]) for model in rig_b_models] == [("qwen", "Qwen On B")]
+    assert client.get("/api/models").json() == []
 
 
 def test_create_model_from_completed_download_infers_installed_files(tmp_path: Path, monkeypatch) -> None:
@@ -608,6 +675,67 @@ def test_config_preview_honors_requested_model_ids(tmp_path: Path, monkeypatch) 
     assert "one:" in scoped.json()["yaml"]
     assert "two:" not in scoped.json()["yaml"]
     assert unknown.status_code == 400
+
+
+def test_ssh_config_preview_validates_target_paths_not_manager_paths(tmp_path: Path, monkeypatch) -> None:
+    app = create_app(tmp_path / "manager.db")
+    client = TestClient(app)
+    ssh_rig = TargetRig(
+        id="rig-40",
+        name="Rig 40",
+        mode="ssh",
+        host="192.168.42.40",
+        username="n3kr0",
+        model_root="/remote/models",
+        llama_swap_model_root="/models",
+        config_path="/remote/llama-swap/config.yaml",
+        backups_dir="/remote/backups",
+        download_temp_dir="/remote/tmp",
+    )
+    assert client.post("/api/target-rigs", json=ssh_rig.model_dump(mode="json")).status_code == 200
+    client.post(
+        "/api/models",
+        json={
+            "id": "remote-chat",
+            "display_name": "Remote Chat",
+            "target_rig_id": "rig-40",
+            "role": "chat",
+            "container_files": ["/models/chat/remote.gguf"],
+            "primary_model_file": "/models/chat/remote.gguf",
+            "matrix_key": "rc",
+            "matrix_behavior": "runs_alone",
+        },
+    )
+
+    class HealthyRemoteClient:
+        def __init__(self, rig, _settings):
+            self.rig = rig
+
+        def read_text(self, _path: str) -> str:
+            return "models: {}\n"
+
+        def path_status(self, path: str) -> dict:
+            return {
+                "path": path,
+                "exists": True,
+                "is_dir": path != self.rig.config_path,
+                "readable": True,
+                "writable": True,
+            }
+
+        def disk_free_bytes(self, _path: str) -> int:
+            return 100 * 1024**3
+
+    monkeypatch.setattr("app.main.create_target_client", lambda rig, settings: HealthyRemoteClient(rig, settings))
+
+    response = client.post("/api/config/preview", json={"target_rig_id": "rig-40", "model_ids": ["remote-chat"]})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["valid"] is True
+    assert payload["errors"] == []
+    assert "remote-chat:" in payload["yaml"]
+    assert "/remote/" not in payload["yaml"]
 
 
 def test_config_apply_blocks_destructive_stage_until_confirmed(tmp_path: Path, monkeypatch) -> None:
@@ -1215,3 +1343,20 @@ def test_download_cleanup_route_removes_terminal_jobs_only(tmp_path: Path) -> No
     assert response.json() == {"removed": 2}
     remaining = {job["id"] for job in client.get("/api/downloads").json()}
     assert remaining == {"running"}
+
+
+def test_download_cleanup_route_can_be_scoped_to_target_rig(tmp_path: Path) -> None:
+    app = create_app(tmp_path / "manager.db")
+    client = TestClient(app)
+    app.state.db.save_target_rig(TargetRig(id="rig-a", name="Rig A"))
+    app.state.db.save_target_rig(TargetRig(id="rig-b", name="Rig B"))
+    app.state.db.save_job(DownloadJob(id="a-done", status="completed", repo_id="org/repo", target_rig_id="rig-a"))
+    app.state.db.save_job(DownloadJob(id="b-done", status="completed", repo_id="org/repo", target_rig_id="rig-b"))
+    app.state.db.save_job(DownloadJob(id="a-running", status="running", repo_id="org/repo", target_rig_id="rig-a"))
+
+    response = client.delete("/api/downloads/terminal?target_rig_id=rig-a")
+
+    assert response.status_code == 200
+    assert response.json() == {"removed": 1}
+    remaining = {job["id"] for job in client.get("/api/downloads").json()}
+    assert remaining == {"b-done", "a-running"}
