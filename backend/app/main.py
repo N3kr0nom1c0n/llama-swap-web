@@ -104,9 +104,9 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         client = create_target_client(rig, settings)
         return {
             "rig": rig.model_dump(mode="json"),
-            "model_root": client.path_status(rig.model_root),
-            "config": client.path_status(rig.config_path),
-            "backups": client.path_status(rig.backups_dir),
+            "model_root": _safe_target_path_status(client, rig.model_root),
+            "config": _safe_target_path_status(client, rig.config_path),
+            "backups": _safe_target_path_status(client, rig.backups_dir),
             "runtime": client.runtime_status(),
         }
 
@@ -651,6 +651,20 @@ def _target_rig_or_404(db: Database, target_rig_id: str | None) -> TargetRig:
     if not rig.enabled:
         raise HTTPException(status_code=409, detail=f"target rig is disabled: {rig.id}")
     return rig
+
+
+def _safe_target_path_status(client, path: str) -> dict:
+    try:
+        return client.path_status(path)
+    except TargetRigError as exc:
+        return {
+            "path": path,
+            "exists": False,
+            "is_dir": False,
+            "readable": False,
+            "writable": False,
+            "error": str(exc),
+        }
 
 
 def _read_current_config_from_target(client, config_path: str) -> str:

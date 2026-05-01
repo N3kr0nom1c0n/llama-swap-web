@@ -44,7 +44,7 @@ RUN if ! getent group 1000 >/dev/null; then groupadd --gid 1000 hostuser; fi \
     && chown -R app:app /app /models /backups /data
 
 EXPOSE 8081
-VOLUME ["/models", "/backups", "/data"]
+VOLUME ["/data"]
 
 USER app:app
 

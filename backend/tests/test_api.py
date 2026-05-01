@@ -172,6 +172,52 @@ def test_ssh_llama_swap_restart_failure_returns_controlled_error(tmp_path: Path,
     assert "ssh restart failed" in response.json()["detail"]
 
 
+def test_target_rig_health_returns_path_errors_without_500(tmp_path: Path, monkeypatch) -> None:
+    from app.target_rig_service import TargetRigError
+
+    app = create_app(tmp_path / "manager.db")
+    client = TestClient(app)
+    ssh_rig = TargetRig(
+        id="rig-40",
+        name="Rig 40",
+        mode="ssh",
+        host="192.168.42.40",
+        username="n3kr0",
+        model_root="/remote/models",
+        config_path="/remote/config.yaml",
+        backups_dir="/remote/backups",
+        download_temp_dir="/remote/tmp",
+    )
+    assert client.post("/api/target-rigs", json=ssh_rig.model_dump(mode="json")).status_code == 200
+
+    class BrokenHealthClient:
+        def path_status(self, path: str) -> dict:
+            raise TargetRigError("ssh key not readable")
+
+        def runtime_status(self) -> dict:
+            return {
+                "enabled": True,
+                "available": False,
+                "container_name": "Rig 40",
+                "socket_path": "ssh",
+                "container_id": "",
+                "status": "unreachable",
+                "running": False,
+                "error": "ssh key not readable",
+                "warning": "",
+            }
+
+    monkeypatch.setattr("app.main.create_target_client", lambda *_args, **_kwargs: BrokenHealthClient())
+
+    response = client.get("/api/target-rigs/rig-40/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["model_root"]["error"] == "ssh key not readable"
+    assert payload["model_root"]["writable"] is False
+    assert payload["runtime"]["available"] is False
+
+
 def test_hf_token_write_preserves_env_file_when_replace_fails(tmp_path: Path, monkeypatch) -> None:
     env_file = tmp_path / ".env"
     original = "OTHER=value\nHF_TOKEN=hf_existing_secret\nTRAILING=kept\n"
