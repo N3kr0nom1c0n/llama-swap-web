@@ -26,13 +26,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY requirements.txt ./
-RUN pip install --no-cache-dir --upgrade pip \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssh-client \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
 COPY backend/ ./backend/
 COPY --from=frontend-builder /src/frontend/dist ./frontend/dist
 
-RUN groupadd --gid "${APP_GID}" app \
+RUN if ! getent group 1000 >/dev/null; then groupadd --gid 1000 hostuser; fi \
+    && if ! getent passwd 1000 >/dev/null; then useradd --uid 1000 --gid 1000 --home-dir /data --no-create-home --shell /usr/sbin/nologin hostuser; fi \
+    && groupadd --gid "${APP_GID}" app \
     && useradd --uid "${APP_UID}" --gid "${APP_GID}" --home-dir /data --no-create-home --shell /usr/sbin/nologin app \
     && mkdir -p /models /backups /data/tmp /data/hf-cache/hub \
     && touch /app/config.yaml \

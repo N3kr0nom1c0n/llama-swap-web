@@ -65,6 +65,27 @@ def test_classifies_single_gguf_selected() -> None:
     assert classified.selected
 
 
+def test_resolve_repo_url_leaves_all_files_unselected() -> None:
+    class FakeApi:
+        def list_repo_files(self, repo_id, revision, token):
+            return ["model.gguf", "chat_template.jinja", "model-00001-of-00002.gguf"]
+
+    resolved = resolve_hf_url("https://huggingface.co/org/repo/tree/main", token=False, api=FakeApi())
+
+    assert resolved.repo_id == "org/repo"
+    assert [file.path for file in resolved.files if file.selected] == []
+
+
+def test_resolve_direct_file_url_selects_only_linked_file() -> None:
+    class FakeApi:
+        def list_repo_files(self, repo_id, revision, token):
+            return ["other.gguf", "model.gguf", "chat_template.jinja"]
+
+    resolved = resolve_hf_url("https://huggingface.co/org/repo/blob/main/model.gguf", token=False, api=FakeApi())
+
+    assert [file.path for file in resolved.files if file.selected] == ["model.gguf"]
+
+
 def test_hf_calls_do_not_fall_back_to_process_env_token(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("HF_TOKEN", "hf_startup_secret")
     calls: dict[str, object] = {}

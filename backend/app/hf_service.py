@@ -80,9 +80,11 @@ def resolve_hf_url(url: str, revision: str = "main", token: str | bool | None = 
     api = api or HfApi()
     files = api.list_repo_files(reference.repo_id, revision=reference.revision, token=token)
     classified = classify_files(files)
+    for item in classified:
+        item.selected = False
     if reference.filename:
         for item in classified:
-            item.selected = item.path == reference.filename or item.selected
+            item.selected = item.path == reference.filename
     return HfResolveResponse(
         repo_id=reference.repo_id,
         revision=reference.revision,
