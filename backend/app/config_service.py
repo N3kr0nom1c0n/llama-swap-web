@@ -485,14 +485,16 @@ def validate_config_document(document: dict, models: list[ManagedModel], setting
             continue
         if free_gb < settings.disk_safety_gb:
             errors.append(f"{label} free space {free_gb:.1f}GB is below safety floor {settings.disk_safety_gb}GB")
-    config_parent = Path(settings.llama_swap_config_path).parent
-    if not config_parent.exists():
-        errors.append(f"config parent directory does not exist: {config_parent}")
-    elif not os.access(config_parent, os.W_OK):
-        errors.append(f"config parent directory is not writable: {config_parent}")
     config_file = Path(settings.llama_swap_config_path)
-    if config_file.exists() and not os.access(config_file, os.W_OK):
-        errors.append(f"config file is not writable: {config_file}")
+    config_parent = config_file.parent
+    if config_file.exists():
+        if not os.access(config_file, os.W_OK):
+            errors.append(f"config file is not writable: {config_file}")
+    else:
+        if not config_parent.exists():
+            errors.append(f"config parent directory does not exist: {config_parent}")
+        elif not os.access(config_parent, os.W_OK):
+            errors.append(f"config parent directory is not writable: {config_parent}")
     return errors
 
 
@@ -650,10 +652,11 @@ def backup_and_apply_config(
         backup.write_text("", encoding="utf-8")
     temp_path: Path | None = None
     try:
+        temp_dir = backup_root if config.exists() and os.access(config, os.W_OK) and not os.access(config.parent, os.W_OK) else config.parent
         with tempfile.NamedTemporaryFile(
             "w",
             encoding="utf-8",
-            dir=config.parent,
+            dir=temp_dir,
             prefix=f".{config.name}.",
             suffix=".tmp",
             delete=False,
@@ -662,11 +665,14 @@ def backup_and_apply_config(
             temp_file.flush()
             os.fsync(temp_file.fileno())
             temp_path = Path(temp_file.name)
-        try:
-            os.replace(temp_path, config)
-        except OSError as exc:
-            if exc.errno != errno.EBUSY:
-                raise
+        if temp_path.parent == config.parent:
+            try:
+                os.replace(temp_path, config)
+            except OSError as exc:
+                if exc.errno != errno.EBUSY:
+                    raise
+                _overwrite_config_in_place(temp_path, config)
+        else:
             _overwrite_config_in_place(temp_path, config)
         _prune_config_backups(backup_root, retention_count=retention_count, retention_days=retention_days)
     finally:

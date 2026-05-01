@@ -95,6 +95,29 @@ def test_preview_does_not_create_missing_validation_directories(tmp_path: Path) 
     assert not (tmp_path / "tmp").exists()
 
 
+def test_preview_allows_writable_bind_mounted_config_file_with_unwritable_parent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = make_settings(tmp_path)
+    config = Path(settings.llama_swap_config_path)
+    config.write_text("models: {}\n", encoding="utf-8")
+    model = ManagedModel(id="chat", display_name="Chat", primary_model_file="/models/chat/chat.gguf")
+    original_access = os.access
+
+    def fake_access(path: str | os.PathLike[str], mode: int) -> bool:
+        target = Path(path)
+        if target == config.parent and mode == os.W_OK:
+            return False
+        if target == config and mode == os.W_OK:
+            return True
+        return original_access(path, mode)
+
+    monkeypatch.setattr("app.config_service.os.access", fake_access)
+
+    result = preview_config("models: {}\n", [model], settings)
+
+    assert result.valid
+    assert "config parent directory is not writable" not in result.errors
+
+
 def test_preview_rejects_legacy_groups() -> None:
     settings = ManagerSettings(manager_model_root="/models", llama_swap_model_root="/models")
     model = ManagedModel(id="chat", display_name="Chat", primary_model_file="/models/chat/chat.gguf")
@@ -607,6 +630,29 @@ def test_backup_and_apply_falls_back_for_bind_mounted_config(tmp_path: Path, mon
     assert config.read_text(encoding="utf-8") == "models:\n  chat: {}\n"
     assert replace_calls and replace_calls[0][1] == config
     assert not replace_calls[0][0].exists()
+
+
+def test_backup_and_apply_overwrites_existing_config_when_parent_is_unwritable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = tmp_path / "config.yaml"
+    backups = tmp_path / "backups"
+    config.write_text("models: {}\n", encoding="utf-8")
+    original_access = os.access
+
+    def fake_access(path: str | os.PathLike[str], mode: int) -> bool:
+        target = Path(path)
+        if target == config.parent and mode == os.W_OK:
+            return False
+        if target == config and mode == os.W_OK:
+            return True
+        return original_access(path, mode)
+
+    monkeypatch.setattr("app.config_service.os.access", fake_access)
+
+    backup = backup_and_apply_config(str(config), str(backups), "models:\n  chat: {}\n")
+
+    assert backup.read_text(encoding="utf-8") == "models: {}\n"
+    assert config.read_text(encoding="utf-8") == "models:\n  chat: {}\n"
+    assert not list(backups.glob(".config.yaml.*.tmp"))
 
 
 def test_backup_and_apply_rejects_missing_config_parent(tmp_path: Path) -> None:
