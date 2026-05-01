@@ -12,28 +12,32 @@ const STORAGE_KEY = "llama-swap-manager.targetRigId";
 const TargetRigContext = createContext<TargetRigContextValue | null>(null);
 
 export function TargetRigProvider({ children, targetRigs }: { children: ReactNode; targetRigs: TargetRig[] }) {
-  const defaultRig = targetRigs.find((rig) => rig.is_default) ?? targetRigs[0] ?? null;
+  const selectableRigs = useMemo(() => {
+    const enabled = targetRigs.filter((rig) => rig.enabled);
+    return enabled.length ? enabled : targetRigs;
+  }, [targetRigs]);
+  const defaultRig = selectableRigs.find((rig) => rig.is_default) ?? selectableRigs[0] ?? null;
   const [targetRigId, setTargetRigIdState] = useState(() => readStoredRigId() || defaultRig?.id || "default");
-  const selectedRig = targetRigs.find((rig) => rig.id === targetRigId) ?? defaultRig;
+  const selectedRig = selectableRigs.find((rig) => rig.id === targetRigId) ?? defaultRig;
 
   useEffect(() => {
-    if (targetRigs.length && !targetRigs.some((rig) => rig.id === targetRigId) && defaultRig) {
+    if (defaultRig && selectedRig?.id !== targetRigId) {
       setTargetRigIdState(defaultRig.id);
       storeRigId(defaultRig.id);
     }
-  }, [defaultRig, targetRigId, targetRigs]);
+  }, [defaultRig, selectedRig, targetRigId]);
 
   const value = useMemo<TargetRigContextValue>(
     () => ({
       targetRigId: selectedRig?.id ?? targetRigId,
-      targetRigs,
+      targetRigs: selectableRigs,
       selectedRig: selectedRig ?? null,
       setTargetRigId: (id: string) => {
         setTargetRigIdState(id);
         storeRigId(id);
       },
     }),
-    [selectedRig, targetRigId, targetRigs],
+    [selectedRig, selectableRigs, targetRigId],
   );
 
   return <TargetRigContext.Provider value={value}>{children}</TargetRigContext.Provider>;
