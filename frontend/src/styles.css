@@ -1298,12 +1298,47 @@ pre {
   gap: 20px;
 }
 
+.wiki-index-section,
 .wiki-impact-section,
 .wiki-section,
 .wiki-glossary-section {
   display: grid;
   gap: 12px;
   scroll-margin-top: 78px;
+}
+
+.wiki-index-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.wiki-index-group {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.wiki-index-group > span {
+  color: var(--accent-2);
+  font-size: 0.76rem;
+  font-weight: 850;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.wiki-index-group a {
+  color: var(--text);
+  font-size: 0.88rem;
+  line-height: 1.35;
+}
+
+.wiki-index-group a:hover {
+  color: var(--accent);
 }
 
 .wiki-section-title {
@@ -1684,6 +1719,10 @@ pre {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .wiki-index-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .gpu-row {
     grid-template-columns: 1fr;
   }
@@ -1714,6 +1753,7 @@ pre {
   }
 
   .wiki-hero-map,
+  .wiki-index-grid,
   .wiki-glossary-grid {
     grid-template-columns: 1fr;
   }

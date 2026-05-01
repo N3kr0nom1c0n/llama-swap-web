@@ -18,6 +18,7 @@ describe("HelpPage", () => {
       "Search pages, settings, flags, workflows, or glossary terms...",
     );
     expect(screen.getByRole("heading", { name: "Page Guides" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Article Index" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Settings Impact Matrix" })).toBeInTheDocument();
     expect(screen.getAllByText(/Increase ctx-size/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/longer prompts and documents/i).length).toBeGreaterThan(0);
@@ -33,6 +34,22 @@ describe("HelpPage", () => {
     );
   });
 
+  it("covers production operations, every major workflow, and field reference topics", async () => {
+    renderWithProviders(<HelpPage />);
+
+    expect(await screen.findByRole("heading", { name: "First Model Quickstart" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Production Readiness Checklist" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Field Reference" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Import Model Field Reference" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Models Field Reference" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Config Preview Controls" })).toBeInTheDocument();
+    expect(screen.getAllByText(/Backup retention count/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Upload GGUF/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Clear Finished/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/destructive diff/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Docker socket exposure/i).length).toBeGreaterThan(0);
+  });
+
   it("filters wiki articles, impact rows, and glossary terms together", async () => {
     renderWithProviders(<HelpPage />);
 
@@ -43,5 +60,19 @@ describe("HelpPage", () => {
     expect(within(results).getAllByText(/tensor split/i).length).toBeGreaterThan(0);
     expect(within(results).queryByRole("heading", { name: "Dashboard" })).not.toBeInTheDocument();
     expect(within(results).queryByRole("heading", { name: "Hugging Face Token" })).not.toBeInTheDocument();
+  });
+
+  it("filters production readiness and field reference content", async () => {
+    renderWithProviders(<HelpPage />);
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search wiki" }), {
+      target: { value: "backup retention" },
+    });
+
+    const results = screen.getByTestId("help-results");
+    expect(within(results).getByRole("heading", { name: "Settings Field Reference" })).toBeInTheDocument();
+    expect(within(results).getAllByText(/Backup retention days/i).length).toBeGreaterThan(0);
+    expect(within(results).getByTestId("glossary-backup-retention")).toBeInTheDocument();
+    expect(within(results).queryByRole("heading", { name: "GPU Placement" })).not.toBeInTheDocument();
   });
 });

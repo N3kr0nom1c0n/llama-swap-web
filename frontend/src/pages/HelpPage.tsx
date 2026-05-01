@@ -90,6 +90,10 @@ export function HelpPage() {
       <div className="wiki-layout">
         <aside className="wiki-rail" aria-label="Wiki navigation">
           <nav>
+            <a href="#wiki-index">
+              <BookOpen size={16} aria-hidden="true" />
+              Article Index
+            </a>
             <a href="#wiki-impact">
               <Gauge size={16} aria-hidden="true" />
               Settings Impact
@@ -113,6 +117,7 @@ export function HelpPage() {
         <div className="wiki-results" data-testid="help-results">
           {hasResults ? (
             <>
+              <ArticleIndex sections={filtered.sections} query={normalizedQuery} />
               <ImpactMatrix rows={filtered.impactRows} query={normalizedQuery} />
               {filtered.sections.map((section) => (
                 <WikiSectionView key={section.id} section={section} />
@@ -141,6 +146,32 @@ function Metric({ icon, value, label }: { icon: ReactNode; value: number; label:
       <strong>{value}</strong>
       <span>{label}</span>
     </div>
+  );
+}
+
+function ArticleIndex({ sections, query }: { sections: WikiSection[]; query: string }) {
+  if (query && sections.length === 0) return null;
+
+  return (
+    <section id="wiki-index" className="wiki-index-section">
+      <div className="wiki-section-title">
+        <span className="wiki-kicker">Find the article first</span>
+        <h2>Article Index</h2>
+        <p>Use this as the table of contents for the production help system.</p>
+      </div>
+      <div className="wiki-index-grid">
+        {sections.map((section) => (
+          <div key={section.id} className="wiki-index-group">
+            <span>{section.title}</span>
+            {section.articles.map((article) => (
+              <a key={article.id} href={`#${article.id}`}>
+                {article.title}
+              </a>
+            ))}
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -408,5 +439,8 @@ function sectionIcon(sectionId: string) {
   if (sectionId === "page-guides") return <ListChecks size={16} aria-hidden="true" />;
   if (sectionId === "settings-flags") return <Settings2 size={16} aria-hidden="true" />;
   if (sectionId === "runbooks") return <Cable size={16} aria-hidden="true" />;
+  if (sectionId === "quickstart") return <Workflow size={16} aria-hidden="true" />;
+  if (sectionId === "field-reference") return <FileCode2 size={16} aria-hidden="true" />;
+  if (sectionId === "production-ops") return <Gauge size={16} aria-hidden="true" />;
   return <Cpu size={16} aria-hidden="true" />;
 }
