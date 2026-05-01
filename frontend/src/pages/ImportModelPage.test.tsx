@@ -81,6 +81,7 @@ describe("ImportModelPage", () => {
     });
 
     renderWithProviders(<ImportModelPage />);
+    fireEvent.click(await screen.findByRole("button", { name: /Download/ }));
 
     const row = await screen.findByText("org/repo");
     const progress = within(row.closest("tr") as HTMLTableRowElement).getByRole("progressbar", {
@@ -157,6 +158,7 @@ describe("ImportModelPage", () => {
     });
 
     renderWithProviders(<ImportModelPage />);
+    fireEvent.click(await screen.findByRole("button", { name: /Configure/ }));
 
     await screen.findByText("Ready to configure");
     expect(screen.getAllByText("/models/chat/repo/model.gguf").length).toBeGreaterThan(0);
@@ -246,6 +248,7 @@ describe("ImportModelPage", () => {
 
     renderWithProviders(<ImportModelPage />);
     fireEvent.change(await screen.findByLabelText("Desired name"), { target: { value: "stale-draft" } });
+    fireEvent.click(await screen.findByRole("button", { name: /Configure/ }));
 
     fireEvent.click(await screen.findByRole("button", { name: "Create Managed Model" }));
 
@@ -339,6 +342,7 @@ describe("ImportModelPage", () => {
     });
 
     renderWithProviders(<ImportModelPage />);
+    fireEvent.click(await screen.findByRole("button", { name: /Download/ }));
 
     const clearButton = await screen.findByRole("button", { name: "Clear Finished" });
     await waitFor(() => expect(clearButton).not.toBeDisabled());

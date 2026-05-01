@@ -112,6 +112,7 @@ describe("ModelsPage", () => {
     renderWithProviders(<ModelsPage />);
 
     await screen.findByDisplayValue("tiny-chat");
+    fireEvent.click(screen.getByRole("button", { name: /llama-server flags/i }));
     const gpuLayers = await screen.findByLabelText(/n-gpu-layers/);
     fireEvent.change(gpuLayers, { target: { value: "999" } });
     await waitFor(() => expect(gpuLayers).toHaveValue("999"));

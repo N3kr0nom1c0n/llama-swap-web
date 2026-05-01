@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, FileCheck2, KeyRound, RefreshCw, Server } from "lucide-react";
+import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { PageHeader } from "../components/PageHeader";
@@ -23,6 +24,7 @@ export function DashboardPage() {
   const activeJobs = jobs.filter(isJobActive);
   const failedJobs = jobs.filter(isJobFailed);
   const actionNeeded = readyJobs.length + failedJobs.length + (state.data?.config_status.writable === false ? 1 : 0);
+  const incompleteCount = models.data?.filter((model) => !model.primary_model_file).length ?? 0;
 
   return (
     <div className="page">
@@ -38,26 +40,10 @@ export function DashboardPage() {
       />
 
       <section className="metric-grid">
-        <div className="metric">
-          <Server size={18} aria-hidden="true" />
-          <span>Managed models</span>
-          <strong>{state.data?.model_count ?? "..."}</strong>
-        </div>
-        <div className="metric">
-          <AlertTriangle size={18} aria-hidden="true" />
-          <span>Action needed</span>
-          <strong>{downloads.isLoading || models.isLoading || state.isLoading ? "..." : actionNeeded}</strong>
-        </div>
-        <div className="metric">
-          <FileCheck2 size={18} aria-hidden="true" />
-          <span>Config file</span>
-          <strong>{state.data?.config_status.exists ? "present" : "missing"}</strong>
-        </div>
-        <div className="metric">
-          <KeyRound size={18} aria-hidden="true" />
-          <span>HF token</span>
-          <strong>{state.data?.settings.hf_token_configured ? "configured" : "not set"}</strong>
-        </div>
+        <StatusCard icon={<Server size={18} aria-hidden="true" />} tone="blue" value={state.data?.model_count ?? "..."} label="Managed models" />
+        <StatusCard icon={<AlertTriangle size={18} aria-hidden="true" />} tone={actionNeeded ? "warn" : "ok"} value={downloads.isLoading || models.isLoading || state.isLoading ? "..." : actionNeeded} label="Action needed" />
+        <StatusCard icon={<FileCheck2 size={18} aria-hidden="true" />} tone={state.data?.config_status.writable ? "ok" : "bad"} value={state.data?.config_status.exists ? "present" : "missing"} label="Config file" />
+        <StatusCard icon={<KeyRound size={18} aria-hidden="true" />} tone={state.data?.settings.hf_token_configured ? "ok" : "warn"} value={state.data?.settings.hf_token_configured ? "set" : "not set"} label="HF token" />
       </section>
 
       <section className="panel">
@@ -159,9 +145,9 @@ export function DashboardPage() {
         </div>
 
         <div className="panel">
-          <div className="panel-header">
-            <h2>GPU Inventory</h2>
-            <StatusPill tone="idle">{state.data?.gpus.length ?? 0} devices</StatusPill>
+        <div className="panel-header">
+          <h2>GPU Inventory</h2>
+          <StatusPill tone="idle">{state.data?.gpus.length ?? 0} devices</StatusPill>
           </div>
           <div className="table-wrap">
             <table>
@@ -190,33 +176,23 @@ export function DashboardPage() {
 
       <section className="panel">
         <div className="panel-header">
-          <h2>Recent Model Entries</h2>
+          <h2>Model Inventory</h2>
+          {incompleteCount > 0 ? <StatusPill tone="warn">{incompleteCount} incomplete</StatusPill> : <StatusPill tone="ok">all staged</StatusPill>}
           <Link className="button secondary" to="/models">
             Open models
           </Link>
         </div>
         {models.data?.length ? (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Role</th>
-                  <th>Matrix</th>
-                  <th>Primary file</th>
-                </tr>
-              </thead>
-              <tbody>
-                {models.data.slice(0, 6).map((model) => (
-                  <tr key={model.id}>
-                    <td>{model.id}</td>
-                    <td>{model.role}</td>
-                    <td>{model.matrix_behavior}</td>
-                    <td className="truncate">{model.primary_model_file || model.container_files[0] || "not set"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="model-status-list">
+            {models.data.slice(0, 6).map((model) => (
+              <div key={model.id} className="model-status-row">
+                <StatusPill tone={model.primary_model_file ? "ok" : "warn"}>{model.primary_model_file ? "staged" : "incomplete"}</StatusPill>
+                <span className="model-status-id">{model.id}</span>
+                <span className="model-status-meta">
+                  {model.role} · {model.matrix_behavior}
+                </span>
+              </div>
+            ))}
           </div>
         ) : (
           <div className="empty-state">
@@ -225,6 +201,18 @@ export function DashboardPage() {
           </div>
         )}
       </section>
+    </div>
+  );
+}
+
+function StatusCard({ icon, tone, value, label }: { icon: ReactNode; tone: "ok" | "warn" | "bad" | "blue"; value: ReactNode; label: string }) {
+  return (
+    <div className="status-card">
+      <div className={`status-card-icon icon-${tone}`}>{icon}</div>
+      <div>
+        <strong>{value}</strong>
+        <span>{label}</span>
+      </div>
     </div>
   );
 }

@@ -78,7 +78,7 @@ describe("DashboardPage", () => {
 
     await waitFor(() => expect(screen.getByText("1")).toBeInTheDocument());
     expect(screen.getByText("HF token")).toBeInTheDocument();
-    expect(screen.getByText("configured")).toBeInTheDocument();
+    expect(screen.getByText("set")).toBeInTheDocument();
     expect(screen.queryByText("secret")).not.toBeInTheDocument();
   });
 

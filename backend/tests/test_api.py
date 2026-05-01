@@ -1211,6 +1211,45 @@ def test_health_reports_app_db_config_models_and_backups(tmp_path: Path, monkeyp
     assert payload["backups"]["exists"] is True
 
 
+def test_default_state_and_health_use_enabled_default_rig_when_local_default_is_disabled(tmp_path: Path, monkeypatch) -> None:
+    config_path = tmp_path / "remote-config.yaml"
+    backups_dir = tmp_path / "remote-backups"
+    models_dir = tmp_path / "remote-models"
+    config_path.write_text("models: {}\n", encoding="utf-8")
+    backups_dir.mkdir()
+    models_dir.mkdir()
+    app = create_app(tmp_path / "manager.db")
+    client = TestClient(app)
+    db = app.state.db
+    local_default = db.get_target_rig("default")
+    assert local_default is not None
+    local_default.enabled = False
+    local_default.is_default = False
+    db.save_target_rig(local_default)
+    db.save_target_rig(
+        TargetRig(
+            id="rig-40",
+            name="Glyph",
+            mode="local",
+            model_root=str(models_dir),
+            llama_swap_model_root="/models",
+            config_path=str(config_path),
+            backups_dir=str(backups_dir),
+            download_temp_dir=str(tmp_path / "tmp"),
+            is_default=True,
+            enabled=True,
+        )
+    )
+
+    state = client.get("/api/state")
+    health = client.get("/api/health")
+
+    assert state.status_code == 200
+    assert state.json()["config_status"]["path"] == str(config_path)
+    assert health.status_code == 200
+    assert health.json()["target_rig"]["id"] == "rig-40"
+
+
 def test_health_returns_503_when_required_paths_are_unwritable(tmp_path: Path, monkeypatch) -> None:
     config_path = tmp_path / "missing" / "config.yaml"
     backups_dir = tmp_path / "missing" / "backups"

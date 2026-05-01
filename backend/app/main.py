@@ -645,12 +645,22 @@ def _read_current_config(config_path: str) -> str:
 
 
 def _target_rig_or_404(db: Database, target_rig_id: str | None) -> TargetRig:
-    rig = db.get_target_rig(target_rig_id or DEFAULT_TARGET_RIG_ID)
+    requested_id = target_rig_id or DEFAULT_TARGET_RIG_ID
+    rig = db.get_target_rig(requested_id)
+    if rig and not rig.enabled and requested_id == DEFAULT_TARGET_RIG_ID:
+        rig = _default_enabled_target_rig(db) or rig
     if not rig:
-        raise HTTPException(status_code=404, detail=f"target rig not found: {target_rig_id or DEFAULT_TARGET_RIG_ID}")
+        raise HTTPException(status_code=404, detail=f"target rig not found: {requested_id}")
     if not rig.enabled:
         raise HTTPException(status_code=409, detail=f"target rig is disabled: {rig.id}")
     return rig
+
+
+def _default_enabled_target_rig(db: Database) -> TargetRig | None:
+    enabled = [rig for rig in db.list_target_rigs() if rig.enabled]
+    if not enabled:
+        return None
+    return next((rig for rig in enabled if rig.is_default), enabled[0])
 
 
 def _safe_target_path_status(client, path: str) -> dict:

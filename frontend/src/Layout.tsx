@@ -1,5 +1,5 @@
-import { NavLink, Outlet } from "react-router-dom";
-import { Activity, CircleHelp, Cpu, FileCode2, Gauge, HardDriveDownload, LayoutDashboard, Settings, Server } from "lucide-react";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { CircleHelp, Cpu, FileCode2, Gauge, HardDriveDownload, LayoutDashboard, RefreshCw, Settings, Server } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
 import { queryKeys } from "./queryKeys";
@@ -16,9 +16,23 @@ const navItems = [
   { to: "/help", label: "Help", icon: CircleHelp },
 ];
 
+const pageTitles: Record<string, string> = {
+  "/": "Dashboard",
+  "/import": "Import Model",
+  "/models": "Models",
+  "/gpus": "GPU Planner",
+  "/config": "Config Preview",
+  "/settings": "Settings",
+  "/help": "Help",
+};
+
 export function Layout() {
+  const location = useLocation();
   const { targetRigId, setTargetRigId, targetRigs, selectedRig } = useTargetRig();
   const state = useQuery({ queryKey: queryKeys.stateFor(targetRigId), queryFn: () => api.state(targetRigId), refetchInterval: 15000 });
+  const pageTitle = pageTitles[location.pathname] ?? "Dashboard";
+  const syncLabel = state.isFetching ? "syncing target state" : "target state current";
+  const configPath = state.data?.config_status.path ?? selectedRig?.config_path ?? "/app/config.yaml";
 
   return (
     <div className="app-shell">
@@ -39,37 +53,56 @@ export function Layout() {
           ))}
         </nav>
         <div className="sidebar-status">
+          <div className="sidebar-target">
+            <span className="sidebar-target-label">Target Rig</span>
+            <select value={targetRigId} onChange={(event) => setTargetRigId(event.target.value)}>
+              {targetRigs.length ? (
+                targetRigs.map((rig) => (
+                  <option key={rig.id} value={rig.id}>
+                    {rig.name} ({rig.mode})
+                  </option>
+                ))
+              ) : (
+                <option value="default">Local Manager Host</option>
+              )}
+            </select>
+            <span className="sidebar-target-meta">
+              {selectedRig?.host || selectedRig?.mode || "local"} · {state.isFetching ? "syncing" : "synced"}
+            </span>
+          </div>
+          <div className="sidebar-metrics">
+            <div>
+              <strong>{state.data?.model_count ?? 0}</strong>
+              <span>Models</span>
+            </div>
+            <div>
+              <strong>{state.data?.gpus.length ?? 0}</strong>
+              <span>GPUs</span>
+            </div>
+            <div>
+              <strong>{state.data?.job_count ?? 0}</strong>
+              <span>Jobs</span>
+            </div>
+          </div>
           <StatusPill tone={state.data?.config_status.writable ? "ok" : "warn"}>
             {state.data?.config_status.writable ? "config writable" : "config check"}
           </StatusPill>
-          <span>{state.data?.config_status.path ?? "/app/config.yaml"}</span>
+          <span title={configPath}>{configPath}</span>
         </div>
       </aside>
       <div className="main-column">
         <div className="topbar">
           <div className="topbar-cluster">
-            <Activity size={16} aria-hidden="true" />
-            <span>{state.isFetching ? "syncing target state" : "target state current"}</span>
-            <label className="target-selector">
-              <span>Target</span>
-              <select value={targetRigId} onChange={(event) => setTargetRigId(event.target.value)}>
-                {targetRigs.length ? (
-                  targetRigs.map((rig) => (
-                    <option key={rig.id} value={rig.id}>
-                      {rig.name} ({rig.mode})
-                    </option>
-                  ))
-                ) : (
-                  <option value="default">Local Manager Host</option>
-                )}
-              </select>
-            </label>
+            <span className={state.isFetching ? "sync-dot syncing" : "sync-dot"} aria-hidden="true" />
+            <span className="topbar-breadcrumb">
+              {selectedRig?.name ?? "Selected target"} / <strong>{pageTitle}</strong>
+            </span>
           </div>
-          <div className="topbar-metrics">
-            <span>{selectedRig?.host || selectedRig?.mode || "local"}</span>
-            <span>{state.data?.model_count ?? 0} models</span>
-            <span>{state.data?.gpus.length ?? 0} GPUs</span>
-            <span>{state.data?.job_count ?? 0} jobs</span>
+          <div className="topbar-actions">
+            <StatusPill tone={state.isFetching ? "idle" : "ok"}>{syncLabel}</StatusPill>
+            <button className="icon-button secondary" type="button" aria-label="Refresh target state" onClick={() => void state.refetch()}>
+              <RefreshCw size={15} aria-hidden="true" />
+            </button>
           </div>
         </div>
         <main>
